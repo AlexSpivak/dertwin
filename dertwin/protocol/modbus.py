@@ -1,10 +1,13 @@
 import asyncio
+import logging
 from typing import List, Dict
 
 from pymodbus.datastore import ModbusServerContext, ModbusSequentialDataBlock, ModbusDeviceContext
 from pymodbus.server import StartAsyncTcpServer
 
 from dertwin.devices.device import DeviceSimulator
+
+logger = logging.getLogger(__name__)
 
 def create_device_context() -> ModbusDeviceContext:
     di_block = ModbusSequentialDataBlock(0, [0] * 100)
@@ -54,7 +57,12 @@ def write_telemetry_registers(configs, context, unit_id, telemetry):
 
         values = encode_value(telemetry[name], dtype, scale, count)
         context[unit_id].setValues(4, addr, values)  # input registers
-
+        logger.debug(
+            "Telemetry written | unit=%s | register=%s | values=%s",
+            unit_id,
+            addr,
+            values,
+        )
 
 def write_command_registers(configs, context, unit_id, commands):
     for entry in configs:
@@ -72,7 +80,12 @@ def write_command_registers(configs, context, unit_id, commands):
 
         values = encode_value(commands[name], dtype, scale, count)
         context[unit_id].setValues(3, addr, values)  # HR
-
+        logger.debug(
+            "Command register written | unit=%s | register=%s | values=%s",
+            unit_id,
+            addr,
+            values,
+        )
 
 def collect_write_instructions(
         configs: List[dict],
@@ -111,9 +124,20 @@ def collect_write_instructions(
                     raw_value -= 1 << 32
 
             instructions[entry["name"]] = raw_value * scale
+            logger.debug(
+                "Collected write instruction | name=%s | value=%s",
+                entry["name"],
+                instructions[entry["name"]],
+            )
+
 
         except Exception as e:
-            print(f"[WARN] Could not read writable register {entry['name']} at {addr}: {e}")
+            logger.warning(
+                "Failed to read writable register | name=%s | addr=%s | error=%s",
+                entry["name"],
+                addr,
+                e,
+            )
             continue
 
     return instructions
@@ -134,7 +158,11 @@ class ModbusSimulator:
 
     async def run_server(self):
         asyncio.create_task(self.update_loop())
-        print(f"[ModbusSimulator] Started device on port {self.port}, unit {self.unit_id}")
+        logger.info(
+            "Modbus device started | port=%s | unit_id=%s",
+            self.port,
+            self.unit_id,
+        )
         await StartAsyncTcpServer(context=self.context, address=("0.0.0.0", self.port))
 
     async def update_loop(self):
@@ -147,9 +175,14 @@ class ModbusSimulator:
             if write_instructions and write_instructions != prev_instructions:
                 applied = self.device_sim.execute_write_instructions(write_instructions)
                 write_command_registers(self.configs, self.context, self.unit_id, applied)
-                print(f"Applied: {applied}")
+                logger.info("Command update applied | %s", applied)
                 prev_instructions = write_instructions
 
             vals = self.device_sim.simulate_values(interval)
             write_telemetry_registers(self.configs, self.context, self.unit_id, vals)
+            logger.debug(
+                "Simulation tick | port=%s | produced telemetry=%s",
+                self.port,
+                vals,
+            )
             await asyncio.sleep(interval)

@@ -12,6 +12,9 @@ from devices.grid_frequency import GridFrequencyModel
 from devices.inverter import InverterSimulator
 from protocol.modbus import ModbusSimulator
 from dertwin.site.site import SiteController
+from dertwin.logging_config import setup_logging
+
+setup_logging("INFO")
 
 ROOT_PROJECT = Path(__file__).parent
 

@@ -1,9 +1,12 @@
 import math
 import random
 import time
+import logging
 from dataclasses import dataclass
 from typing import Optional, List
 
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class FrequencyEvent:
@@ -109,11 +112,11 @@ class GridFrequencyModel:
                 shape=self._rng.choice(["step", "ramp"]),
             )
 
-            print(
-                f"[GridFrequency] Auto event "
-                f"Δf={delta:+.3f} Hz, "
-                f"duration={event.duration:.1f}s, "
-                f"shape={event.shape}"
+            logger.info(
+                "Auto frequency event | Δf=%+.3f Hz | duration=%.1fs | shape=%s",
+                delta,
+                event.duration,
+                event.shape,
             )
 
             self._events.append(event)
