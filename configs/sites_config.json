@@ -1,0 +1,37 @@
+[
+  {
+    "customer_id": 1,
+    "sites": [
+      {
+        "site_id": 1,
+        "assets": [
+          { "asset_id": 1, "type": "bess", "ip": "simulator_site1", "port": 5021 },
+          { "asset_id": 2, "type": "bess", "ip": "simulator_site1", "port": 5022 },
+          { "asset_id": 3, "type": "bess", "ip": "simulator_site1", "port": 5023 },
+          { "asset_id": 4, "type": "energy_meter", "ip": "simulator_site1", "port": 5024 },
+          { "asset_id": 5, "type": "inverter", "ip": "simulator_site1", "port": 5025 }
+        ]
+      },
+      {
+        "site_id": 2,
+        "assets": [
+          { "asset_id": 6, "type": "bess", "ip": "simulator_site2", "port": 5031 },
+          { "asset_id": 7, "type": "bess", "ip": "simulator_site2", "port": 5032 },
+          { "asset_id": 8, "type": "energy_meter", "ip": "simulator_site2", "port": 5033 },
+          { "asset_id": 9, "type": "inverter", "ip": "simulator_site2", "port": 5034 }
+        ]
+      },
+      {
+        "site_id": 3,
+        "assets": [
+          { "asset_id": 10, "type": "bess", "ip": "simulator_site3", "port": 5041 },
+          { "asset_id": 11, "type": "bess", "ip": "simulator_site3", "port": 5042 },
+          { "asset_id": 12, "type": "bess", "ip": "simulator_site3", "port": 5043 },
+          { "asset_id": 13, "type": "bess", "ip": "simulator_site3", "port": 5044 },
+          { "asset_id": 14, "type": "energy_meter", "ip": "simulator_site3", "port": 5045 }
+        ]
+      }
+    ]
+  }
+]
+

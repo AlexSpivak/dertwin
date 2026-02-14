@@ -1,0 +1,158 @@
+telemetry:
+  # System Info
+  - address: 32000
+    name: service_voltage
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
+
+  - address: 32001
+    name: service_current
+    func: 0x04
+    type: int16
+    count: 1
+    scale: 0.1
+    unit: A
+
+  - address: 32002
+    name: system_soc
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: '%'
+
+  - address: 32184
+    name: battery_temperature
+    func: 0x04
+    type: int16
+    count: 1
+    scale: 0.1
+    unit: degC
+
+  # Cumulative energy
+  - address: 32013
+    name: total_charge_energy
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: kWh
+
+  - address: 32014
+    name: total_discharge_energy
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: kWh
+
+  # AC Side Power
+  - address: 10059
+    name: active_power
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: kW
+
+  - address: 10281
+    name: reactive_power
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: kvar
+
+  - address: 10283
+    name: apparent_power
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: kVA
+
+  # Limits
+  - address: 10272
+    name: max_charge_power
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.01
+    unit: kW
+
+  - address: 10273
+    name: max_discharge_power
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.01
+    unit: kW
+
+  # Faults / Status
+  - address: 10050
+    name: working_status
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ''
+
+  - address: 32108
+    name: fault_code
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ''
+
+  # Advanced Telemetry
+  - address: 32021
+    name: charge_and_discharge_cycles
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: 'cycles'
+
+  - address: 32004
+    name: system_soh
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 1
+    unit: '%'
+
+  - address: 10130
+    name: available_charging_power
+    func: 0x04
+    type: uint32
+    count: 2
+    scale: 1
+    unit: kW
+
+  - address: 10132
+    name: available_discharging_power
+    func: 0x04
+    type: uint32
+    count: 2
+    scale: 1
+    unit: kW
+
+  - address: 10126
+    name: on_grid_power
+    func: 0x03
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: kW
+
+  - address: 10245
+    name: grid_frequency
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.01
+    unit: Hz

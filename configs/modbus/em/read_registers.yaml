@@ -1,0 +1,151 @@
+telemetry:
+  # Basic / essential
+  - address: 0
+    name: total_active_power
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.01
+    unit: kW
+  - address: 2
+    name: total_reactive_power
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.01
+    unit: kVar
+  - address: 12
+    name: total_power_factor
+    func: 0x04
+    type: int16
+    count: 1
+    scale: 0.001
+    unit: ''
+  - address: 13
+    name: grid_frequency
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.01
+    unit: Hz
+  - address: 26
+    name: total_import_energy
+    func: 0x04
+    type: uint32
+    count: 2
+    scale: 0.01
+    unit: kWh
+  - address: 28
+    name: total_export_energy
+    func: 0x04
+    type: uint32
+    count: 2
+    scale: 0.01
+    unit: kWh
+
+  # advanced telemetry
+  - address: 14
+    name: phase_voltage_a
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
+  - address: 15
+    name: phase_current_a
+    func: 0x04
+    type: int16
+    count: 1
+    scale: 0.01
+    unit: A
+  - address: 16
+    name: phase_active_power_a
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.01
+    unit: kW
+  - address: 18
+    name: phase_voltage_b
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
+  - address: 19
+    name: phase_current_b
+    func: 0x04
+    type: int16
+    count: 1
+    scale: 0.01
+    unit: A
+  - address: 20
+    name: phase_active_power_b
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.01
+    unit: kW
+  - address: 22
+    name: phase_voltage_c
+    func: 0x04
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
+  - address: 23
+    name: phase_current_c
+    func: 0x04
+    type: int16
+    count: 1
+    scale: 0.01
+    unit: A
+  - address: 24
+    name: phase_active_power_c
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.01
+    unit: kW
+  - address: 30
+    name: apparent_power_a
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.0001
+    unit: kVA
+  - address: 32
+    name: apparent_power_b
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.0001
+    unit: kVA
+  - address: 34
+    name: apparent_power_c
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.0001
+    unit: kVA
+  - address: 36
+    name: reactive_power_a
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.0001
+    unit: kVar
+  - address: 38
+    name: reactive_power_b
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.0001
+    unit: kVar
+  - address: 40
+    name: reactive_power_c
+    func: 0x04
+    type: int32
+    count: 2
+    scale: 0.0001
+    unit: kVar

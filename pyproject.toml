@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dertwin"
+version = "0.0.1"
+description = "DER device simulator with Modbus interface"
+requires-python = ">=3.10"
+
+dependencies = [
+    "pymodbus>=3.5,<4.0",
+    "PyYAML>=6.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21"
+]
