@@ -1,0 +1,21 @@
+{
+  "site_name": "local-dev-site",
+  "step": 0.1,
+  "assets": [
+    {
+      "type": "bess",
+      "port": 55001,
+      "unit_id": 1
+    },
+    {
+      "type": "energy_meter",
+      "port": 55002,
+      "unit_id": 1
+    },
+    {
+      "type": "inverter",
+      "port": 55003,
+      "unit_id": 1
+    }
+  ]
+}

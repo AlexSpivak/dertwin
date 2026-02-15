@@ -1,16 +1,13 @@
 import math
-import random
 from typing import Dict, Optional
-from .device import DeviceSimulator
+from dertwin.core.device import SimulatedDevice
 
 # -------------------------
 # Deterministic / discrete-time BESS Simulator
 # -------------------------
-class BESSSimulator(DeviceSimulator):
+class BESSSimulator(SimulatedDevice):
     def __init__(
         self,
-        interval: float = 0.1,
-        deterministic: bool = True,
         ramp_rate_kw_per_s: float = 100.0,
         ambient_temp_c: float = 20.0,
     ):
@@ -21,10 +18,6 @@ class BESSSimulator(DeviceSimulator):
         ambient_temp_c: environment temperature used by thermal model
         """
         super().__init__()
-
-        # Config
-        self.time_step_sec = interval
-        self.deterministic = deterministic
         self.ramp_rate_kw_per_s = float(ramp_rate_kw_per_s)
         self.ambient_temp_c = float(ambient_temp_c)
 
@@ -32,8 +25,7 @@ class BESSSimulator(DeviceSimulator):
         self.rated_capacity_kwh = 100.0
 
         # Core state
-        # deterministic initial SOC when requested, else keep randomized for variety
-        self.soc = 50.0 if deterministic else random.uniform(40, 60)
+        self.soc = 50.0
         self.temperature_c = 25.0
         self.internal_resistance = 0.05  # ohmic sag (Ω)
 
@@ -79,8 +71,10 @@ class BESSSimulator(DeviceSimulator):
         self.grid_frequency_hz = 50.0
 
         # store last dt seen (helpful for debugging)
-        self._last_dt = float(self.time_step_sec)
+        self.telemetry = {}
 
+    def get_telemetry(self) -> Dict[str, float]:
+        return self.telemetry
     # ------------------------------------------
     # External setter used by write executor
     # ------------------------------------------
@@ -111,9 +105,7 @@ class BESSSimulator(DeviceSimulator):
         """
 
         # ------------ 1) RAMP ------------
-        if dt is None:
-            dt = self.time_step_sec
-        self._last_dt = float(dt)
+        dt = float(dt)
 
         raw_target = float(self.on_grid_power_kw)
 
@@ -186,8 +178,7 @@ class BESSSimulator(DeviceSimulator):
     # Thermal model (deterministic)
     # ------------------------------------------
     def update_temperature(self, dt: Optional[float] = None, ambient: Optional[float] = None) -> float:
-        if dt is None:
-            dt = self._last_dt if hasattr(self, "_last_dt") else self.time_step_sec
+        dt = float(dt)
         if ambient is None:
             ambient = self.ambient_temp_c
 
@@ -206,18 +197,14 @@ class BESSSimulator(DeviceSimulator):
     # ------------------------------------------
     # Main discrete-time simulation step
     # ------------------------------------------
-    def simulate_values(self, dt: Optional[float] = None) -> Dict[str, float]:
+    def update(self, dt: float) -> None:
         """
         Compute telemetry / device state for one simulation step.
         dt: seconds since last simulate_values call (if None, uses self.time_step_sec).
         Returns telemetry dict (names -> values) exactly like before.
         """
-        if dt is None:
-            dt = self.time_step_sec
         # make sure dt is a float
         dt = float(dt)
-        self._last_dt = dt
-
         # Update command application using explicit dt
         self.apply_commanded_power(dt=dt)
 
@@ -254,18 +241,8 @@ class BESSSimulator(DeviceSimulator):
         else:
             working_status = 0
 
-        freq_error = 50.0 - self.grid_frequency_hz
-        # relax at 0.01 * freq_error per step scaled by dt / time_step_sec to be more stable
-        self.grid_frequency_hz += (freq_error * 0.01) * (dt / self.time_step_sec)
-        # if not deterministic, optionally add tiny jitter (kept small)
-        if not self.deterministic:
-            import random
-            self.grid_frequency_hz += random.uniform(-0.01, 0.01)
 
-        # clamp frequency reasonable bounds
-        self.grid_frequency_hz = max(45.0, min(55.0, self.grid_frequency_hz))
-
-        telemetry = {
+        self.telemetry = {
             "service_voltage": self.battery_voltage(),
             "service_current": self.service_current(),
             "system_soc": self.soc,
@@ -287,15 +264,13 @@ class BESSSimulator(DeviceSimulator):
             "grid_frequency": self.grid_frequency_hz,
         }
 
-        return telemetry
-
     # ------------------------------------------
     # Write instruction handler (unchanged)
     # ------------------------------------------
-    def execute_write_instructions(self, instructions: Dict[str, float]) -> Dict[str, float]:
+    def apply_commands(self, commands: Dict[str, float]) -> Dict[str, float]:
         applied = {}
 
-        for name, val in instructions.items():
+        for name, val in commands.items():
             last_val = self._last_applied_commands.get(name)
             if last_val == val:
                 applied[name] = val
