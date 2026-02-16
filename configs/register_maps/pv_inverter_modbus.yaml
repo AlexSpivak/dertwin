@@ -1,0 +1,130 @@
+protocol: modbus_tcp
+device_type: pv_inverter
+description: "Generic PV inverter Modbus register map"
+
+registers:
+
+  # ==========================================================
+  # TELEMETRY (READ)
+  # ==========================================================
+
+  - name: inverter_status
+    address: 0
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ""
+
+  - name: total_input_power
+    address: 1
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: W
+
+  - name: total_active_power
+    address: 35
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: W
+
+  - name: grid_frequency
+    address: 37
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.01
+    unit: Hz
+
+  - name: today_output_energy
+    address: 53
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: kWh
+
+  - name: lifetime_output_energy
+    address: 55
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: kWh
+
+  - name: temp_inverter
+    address: 93
+    func: 0x04
+    direction: read
+    type: int16
+    count: 1
+    scale: 0.1
+    unit: degC
+
+  - name: power_factor
+    address: 100
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ""
+
+  - name: fault_code
+    address: 105
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ""
+
+
+  # ==========================================================
+  # COMMANDS (WRITE)
+  # ==========================================================
+
+  - name: remote_on_off
+    address: 0
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    options:
+      0: Off
+      1: On
+
+  - name: active_power_rate
+    address: 3
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    scale: 1
+    unit: "%"
+
+  - name: reactive_power_rate
+    address: 4
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    scale: 1
+    unit: "%"
+
+  - name: power_factor_setpoint
+    address: 5
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1

@@ -8,21 +8,35 @@ from dertwin.controllers.site_controller import SiteController
 TEST_CONFIG = {
     "site_name": "integration-test-site",
     "step": 0.1,
+    "register_map_root": "configs/register_maps",
     "assets": [
         {
             "type": "bess",
-            "port": 55001,
-            "unit_id": 1,
+            "protocols": [
+                {
+                    "kind": "modbus_tcp",
+                    "ip": "127.0.0.1",
+                    "port": 55001,
+                    "unit_id": 1,
+                    "register_map": "bess_modbus.yaml",
+                }
+            ],
         },
         {
             "type": "energy_meter",
-            "port": 55002,
-            "unit_id": 1,
+            "protocols": [
+                {
+                    "kind": "modbus_tcp",
+                    "ip": "127.0.0.1",
+                    "port": 55002,
+                    "unit_id": 1,
+                    "register_map": "energy_meter_modbus.yaml",
+                }
+            ],
         },
     ],
 }
 
-# TODO improve this test!
 @pytest.mark.asyncio
 async def test_full_site_modbus_telemetry():
 
@@ -37,7 +51,7 @@ async def test_full_site_modbus_telemetry():
         client = AsyncModbusTcpClient("127.0.0.1", port=55002)
         await client.connect()
 
-        response = await client.read_holding_registers(
+        response = await client.read_input_registers(
             address=0,
             count=2,
         )

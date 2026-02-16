@@ -1,5 +1,6 @@
 from typing import List, Dict
 from dertwin.core.device import SimulatedDevice
+from dertwin.core.registers import RegisterMap
 from dertwin.protocol.modbus import (
     collect_write_instructions,
     write_telemetry_registers,
@@ -12,11 +13,11 @@ class DeviceController:
         self,
         device: SimulatedDevice,
         protocols: List,
-        register_configs: List[dict],
+        register_map: RegisterMap,
     ):
         self.device = device
-        self.protocols = protocols   # TODO refactor to abstract protocol class e.g. ModbusSimulator instance or other
-        self.configs = register_configs
+        self.protocols = protocols
+        self.register_map = register_map
 
         self._last_commands: Dict[str, float] = {}
 
@@ -36,9 +37,9 @@ class DeviceController:
 
         for proto in self.protocols:
             cmds = collect_write_instructions(
-                self.configs,
+                self.register_map.writes,
                 proto.context,
-                proto.unit_id
+                proto.unit_id,
             )
             merged.update(cmds)
 
@@ -47,17 +48,17 @@ class DeviceController:
     def apply_telemetry(self, telemetry: Dict[str, float]) -> None:
         for proto in self.protocols:
             write_telemetry_registers(
-                self.configs,
+                self.register_map.reads,
                 proto.context,
                 proto.unit_id,
-                telemetry
+                telemetry,
             )
 
     def write_protocol_commands(self, commands: Dict[str, float]) -> None:
         for proto in self.protocols:
             write_command_registers(
-                self.configs,
+                self.register_map.writes,
                 proto.context,
                 proto.unit_id,
-                commands
+                commands,
             )

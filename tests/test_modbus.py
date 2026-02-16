@@ -4,24 +4,43 @@ from dertwin.protocol.modbus import (
     collect_write_instructions,
 )
 
-TEST_CONFIG = [
-    {"address": 10055, "name": "start_stop_standby", "func": 0x06, "type": "int16"},
-    {"address": 10126, "name": "on_grid_power", "func": 0x10, "type": "int32", "scale": 0.1, "count": 2},
+from dertwin.core.registers import RegisterDefinition, RegisterDirection
+
+
+TEST_REGISTERS = [
+    RegisterDefinition(
+        name="start_stop_standby",
+        address=10055,
+        func=0x06,
+        direction=RegisterDirection.WRITE,
+        type="int16",
+        count=1,
+        scale=1.0,
+    ),
+    RegisterDefinition(
+        name="on_grid_power",
+        address=10126,
+        func=0x10,
+        direction=RegisterDirection.WRITE,
+        type="int32",
+        count=2,
+        scale=0.1,
+    ),
 ]
 
 
 def test_write_and_collect_command():
-    modbus = ModbusSimulator(port=5021, unit_id=1)
+    modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
 
     write_command_registers(
-        TEST_CONFIG,
+        TEST_REGISTERS,
         modbus.context,
         1,
         {"on_grid_power": 50.0},
     )
 
     instructions = collect_write_instructions(
-        TEST_CONFIG,
+        TEST_REGISTERS,
         modbus.context,
         1,
     )
@@ -30,17 +49,17 @@ def test_write_and_collect_command():
 
 
 def test_collect_int16_signed():
-    modbus = ModbusSimulator(port=5021, unit_id=1)
+    modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
 
     write_command_registers(
-        TEST_CONFIG,
+        TEST_REGISTERS,
         modbus.context,
         1,
         {"start_stop_standby": -1},
     )
 
     instructions = collect_write_instructions(
-        TEST_CONFIG,
+        TEST_REGISTERS,
         modbus.context,
         1,
     )

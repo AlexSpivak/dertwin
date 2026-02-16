@@ -3,11 +3,10 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import yaml
-
 from dertwin.core.clock import SimulationClock
 from dertwin.core.engine import SimulationEngine
 from dertwin.controllers.device_controller import DeviceController
+from dertwin.core.registers import RegisterMap
 from dertwin.devices.bess import BESSSimulator
 from dertwin.devices.inverter import InverterSimulator
 from dertwin.devices.energy_meter import EnergyMeterSimulator
@@ -24,6 +23,7 @@ class SiteController:
 
     def __init__(self, config: Dict):
         self.config = config
+        self.register_map_root = Path(config.get("register_map_root", "."))
 
         self.clock = SimulationClock(step=config.get("step", 0.1))
         self.engine: Optional[SimulationEngine] = None
@@ -41,6 +41,7 @@ class SiteController:
         logger.info("Building site: %s", self.config.get("site_name", "unnamed"))
 
         devices_by_type: Dict[str, List] = {}
+        devices: List = []
 
         # ---------------------------------------
         # Create devices
@@ -48,11 +49,11 @@ class SiteController:
 
         for asset in self.config["assets"]:
             device = self._create_device(asset)
+            devices.append(device)
             devices_by_type.setdefault(asset["type"], []).append(device)
 
         # ---------------------------------------
         # Wire cross dependencies
-        # (example: PV + BESS → Energy Meter)
         # ---------------------------------------
 
         bess_devices = devices_by_type.get("bess", [])
@@ -72,30 +73,39 @@ class SiteController:
         # Create controllers + protocols
         # ---------------------------------------
 
-        devices = []
-
-        for asset in self.config["assets"]:
-            device = self._create_device(asset)
-            devices.append(device)
-            devices_by_type.setdefault(asset["type"], []).append(device)
-
         for asset, device in zip(self.config["assets"], devices):
-            register_cfg = self._load_register_map(asset["type"])
 
-            modbus = ModbusSimulator(
-                port=asset["port"],
-                unit_id=asset.get("unit_id", 1),
-            )
+            for proto_cfg in asset.get("protocols", []):
 
-            self.protocols.append(modbus)
+                if proto_cfg["kind"] == "modbus_tcp":
 
-            controller = DeviceController(
-                device=device,
-                protocols=[modbus],
-                register_configs=register_cfg,
-            )
+                    map_file = proto_cfg["register_map"]
+                    map_path = Path(map_file)
+                    if not map_path.is_absolute():
+                        map_path = self.register_map_root / map_path
 
-            self.controllers.append(controller)
+                    register_map = RegisterMap.from_yaml(map_path)
+
+                    modbus = ModbusSimulator(
+                        address=proto_cfg["ip"],
+                        port=proto_cfg["port"],
+                        unit_id=proto_cfg.get("unit_id", 1),
+                    )
+
+                    self.protocols.append(modbus)
+
+                    controller = DeviceController(
+                        device=device,
+                        protocols=[modbus],
+                        register_map=register_map,
+                    )
+
+                    self.controllers.append(controller)
+
+                else:
+                    raise ValueError(
+                        f"Unsupported protocol kind: {proto_cfg['kind']}"
+                    )
 
         # ---------------------------------------
         # Create engine
@@ -152,23 +162,6 @@ class SiteController:
             )
 
         raise ValueError(f"Unknown asset type: {dtype}")
-
-    def _load_register_map(self, asset_type: str) -> List[Dict]:
-        base = Path("configs/modbus") / asset_type
-        read_path = base / "read_registers.yaml"
-        write_path = base / "write_registers.yaml"
-
-        registers = []
-
-        if read_path.exists():
-            with open(read_path) as f:
-                registers += yaml.safe_load(f).get("telemetry", [])
-
-        if write_path.exists():
-            with open(write_path) as f:
-                registers += yaml.safe_load(f).get("commands", [])
-
-        return registers
 
     def _all_devices(self, devices_by_type: Dict[str, List]):
         for dtype in devices_by_type:

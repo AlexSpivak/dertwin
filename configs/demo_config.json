@@ -1,21 +1,43 @@
 {
   "site_name": "local-dev-site",
   "step": 0.1,
+  "register_map_root": "configs/register_maps",
   "assets": [
     {
       "type": "bess",
-      "port": 55001,
-      "unit_id": 1
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "127.0.0.1",
+          "port": 55001,
+          "unit_id": 1,
+          "register_map": "bess_modbus.yaml"
+        }
+      ]
     },
     {
       "type": "energy_meter",
-      "port": 55002,
-      "unit_id": 1
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "127.0.0.1",
+          "port": 55002,
+          "unit_id": 1,
+          "register_map": "energy_meter_modbus.yaml"
+        }
+      ]
     },
     {
       "type": "inverter",
-      "port": 55003,
-      "unit_id": 1
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "127.0.0.1",
+          "port": 55003,
+          "unit_id": 1,
+          "register_map": "pv_inverter_modbus.yaml"
+        }
+      ]
     }
   ]
 }

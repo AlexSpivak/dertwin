@@ -14,9 +14,16 @@ def load_config(path: Path) -> dict:
         path = ROOT / path
 
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        config = json.load(f)
 
+    # resolve register_map_root relative to config file
+    if "register_map_root" in config:
+        register_map_root = Path(config["register_map_root"])
+        if not register_map_root.is_absolute():
+            register_map_root = ROOT / register_map_root
+        config["register_map_root"] = str(register_map_root.resolve())
 
+    return config
 
 async def run_site(config_path: Path):
     config = load_config(config_path)
