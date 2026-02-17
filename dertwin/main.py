@@ -33,9 +33,8 @@ async def run_site(config_path: Path):
 
     try:
         await site.start()
-    except KeyboardInterrupt:
-        site.stop()
-
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        await site.stop()
 
 def main():
     parser = argparse.ArgumentParser(description="Run DER Twin Site Simulator")

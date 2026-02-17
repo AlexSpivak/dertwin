@@ -33,8 +33,6 @@ class SimulationEngine:
         while self._running:
             await self.step_once()
 
-        logger.info("Simulation engine stopped")
-
     # ---------------------------------------------------------
     # SINGLE STEP (Deterministic Safe)
     # ---------------------------------------------------------
@@ -60,8 +58,6 @@ class SimulationEngine:
             )
 
         await self.clock.tick()
-
-        logger.info("Simulation engine stopped")
 
     def stop(self):
         self._running = False
