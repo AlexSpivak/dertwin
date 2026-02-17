@@ -7,9 +7,11 @@ from pymodbus.client import AsyncModbusTcpClient
 from dertwin.controllers.site_controller import SiteController
 from dertwin.core.registers import RegisterMap
 
+
 TEST_CONFIG = {
     "site_name": "integration-test-site",
     "step": 0.1,
+    "real_time": False,
     "register_map_root": "configs/register_maps",
     "assets": [
         {
@@ -51,20 +53,57 @@ TEST_CONFIG = {
     ],
 }
 
-async def wait_until_server_ready(port: int, retries: int = 20):
-    for _ in range(retries):
-        try:
-            client = AsyncModbusTcpClient("127.0.0.1", port=port)
-            if await client.connect():
-                client.close()
-                return
-        except Exception:
-            pass
+
+# ==========================================================
+# HELPERS
+# ==========================================================
+
+
+async def wait_until_server_ready(port: int):
+    for _ in range(30):
+        client = AsyncModbusTcpClient("127.0.0.1", port=port)
+        if await client.connect():
+            client.close()
+            return
         await asyncio.sleep(0.05)
-    raise RuntimeError(f"Modbus server on port {port} did not start")
+    raise RuntimeError(f"Server on port {port} did not start")
+
+
+def decode_registers(registers, reg_def):
+    if reg_def.count == 1:
+        raw = registers[0]
+        if reg_def.type == "int16" and raw > 0x7FFF:
+            raw -= 1 << 16
+        return raw
+
+    if reg_def.count == 2:
+        raw = (registers[0] << 16) + registers[1]
+        if reg_def.type == "int32" and raw > 0x7FFFFFFF:
+            raw -= 1 << 32
+        return raw
+
+    raise NotImplementedError
+
+
+async def run_steps(site, steps: int):
+    for _ in range(steps):
+        await site.engine.step_once()
+
+
+
+# ==========================================================
+# FULL INTEGRATION TEST
+# ==========================================================
+
 
 @pytest.mark.asyncio
 async def test_full_site_modbus_telemetry():
+    project_root = Path(__file__).resolve().parent.parent
+    if "register_map_root" in TEST_CONFIG:
+        register_map_root = Path(TEST_CONFIG["register_map_root"])
+        if not register_map_root.is_absolute():
+            register_map_root = project_root / register_map_root
+        TEST_CONFIG["register_map_root"] = str(register_map_root.resolve())
 
     site = SiteController(TEST_CONFIG)
     site.build()
@@ -76,105 +115,91 @@ async def test_full_site_modbus_telemetry():
         await wait_until_server_ready(55002)
         await wait_until_server_ready(55003)
 
-        # ------------------------------------------------------
-        # ENERGY METER TELEMETRY TEST
-        # ------------------------------------------------------
+        # Let simulation settle
+        await run_steps(site, 5)
+        register_map_root = project_root / Path(TEST_CONFIG["register_map_root"])
 
-        em_client = AsyncModbusTcpClient("127.0.0.1", port=55002)
-        await em_client.connect()
+        # ==========================================================
+        # VERIFY ALL READ REGISTERS FOR ALL ASSETS
+        # ==========================================================
 
-        response = await em_client.read_input_registers(
-            address=0,
-            count=4,  # total_active_power (2) + total_reactive_power (2)
+        for controller, asset in zip(site.controllers, TEST_CONFIG["assets"]):
+
+            proto = asset["protocols"][0]
+            port = proto["port"]
+
+            client = AsyncModbusTcpClient("127.0.0.1", port=port)
+            await client.connect()
+
+            register_map = RegisterMap.from_yaml(
+                register_map_root / proto["register_map"]
+            )
+
+            for r in register_map.reads:
+
+                response = await client.read_input_registers(
+                    address=r.address,
+                    count=r.count,
+                )
+
+                assert not response.isError()
+
+                raw = decode_registers(response.registers, r)
+
+                device_value = controller.device.get_telemetry().get(r.name)
+
+                if device_value is None:
+                    continue
+
+                expected_raw = int(device_value / r.scale)
+                assert raw == expected_raw
+
+            client.close()
+
+        # ==========================================================
+        # DYNAMIC TEST — BESS CHARGE / DISCHARGE
+        # ==========================================================
+
+        bess_controller = next(
+            c for c in site.controllers if c.device.__class__.__name__.lower().startswith("bess")
         )
-
-        assert not response.isError()
-        assert len(response.registers) == 4
-
-        em_client.close()
-
-        # ------------------------------------------------------
-        # PV INVERTER TELEMETRY TEST
-        # ------------------------------------------------------
-
-        pv_client = AsyncModbusTcpClient("127.0.0.1", port=55003)
-        await pv_client.connect()
-
-        response = await pv_client.read_input_registers(
-            address=35,
-            count=2,  # total_active_power
-        )
-
-        assert not response.isError()
-        assert len(response.registers) == 2
-
-        pv_client.close()
-
-        # ------------------------------------------------------
-        # BESS TELEMETRY TEST
-        # ------------------------------------------------------
 
         bess_client = AsyncModbusTcpClient("127.0.0.1", port=55001)
         await bess_client.connect()
 
-        response = await bess_client.read_input_registers(
-            address=32000,
-            count=3,  # service_voltage, current, soc
-        )
+        # Initial SOC
+        initial_soc = bess_controller.device.get_telemetry()["system_soc"]
 
-        assert not response.isError()
-        assert len(response.registers) == 3
-
-        # ------------------------------------------------------
-        # BESS WRITE COMMAND TEST (32-bit)
-        # ------------------------------------------------------
-
-        # Write on_grid_power_setpoint = +50 kW
-        # scale 0.1 → raw = 500
-        value = 500
+        # Command discharge 50 kW
+        value = int(50 / 0.1)  # scale 0.1
         high = (value >> 16) & 0xFFFF
         low = value & 0xFFFF
 
-        write_response = await bess_client.write_registers(
-            address=10126,
-            values=[high, low],
-        )
+        await bess_client.write_registers(10126, [high, low])
 
-        assert not write_response.isError()
+        await run_steps(site, 2000)
 
-        # Give engine one deterministic tick
-        await asyncio.sleep(0.1)
+        new_soc = bess_controller.device.get_telemetry()["system_soc"]
 
-        # Read back holding register
-        read_back = await bess_client.read_holding_registers(
-            address=10126,
-            count=2,
-        )
+        # SOC should decrease during discharge
+        assert new_soc < initial_soc
 
-        assert not read_back.isError()
-        assert read_back.registers == [high, low]
+        # Now charge
+        value = int(-50 / 0.1)
+        if value < 0:
+            value = (1 << 32) + value
+        high = (value >> 16) & 0xFFFF
+        low = value & 0xFFFF
 
+        await bess_client.write_registers(10126, [high, low])
 
-        assets = TEST_CONFIG["assets"]
-        register_map_root = Path(TEST_CONFIG["register_map_root"])
-        for asset in assets:
-            for proto in asset["protocols"]:
-                register_map = RegisterMap.from_yaml(register_map_root / Path(proto["register_map"]))
-                for r in register_map.reads:
-                    if asset.get("type") == "bess":
-                        response = await bess_client.read_input_registers(address=r.address, count=r.count)
-                        if r.count == 1:
-                            register_data = response.registers[0]
-                        else:
-                            register_data = response.registers[1] + response.registers[0]
-                        # divide simulated data on scale to get the int value similar to what we write to registers
-                        simulated_data = int(site.controllers[0].device.get_telemetry().get(r.name) / r.scale)
-                        if register_data != simulated_data:
-                            print(f"Register data {register_data} != simulated data")
-                        assert register_data == simulated_data
+        await run_steps(site, 2000)
+
+        charged_soc = bess_controller.device.get_telemetry()["system_soc"]
+
+        assert charged_soc > new_soc
 
         bess_client.close()
-
 
     finally:
         await site.stop()

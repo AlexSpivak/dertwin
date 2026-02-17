@@ -107,10 +107,6 @@ class SiteController:
 
         self._built = True
 
-    # ------------------------------------------------------------------
-    # START / STOP
-    # ------------------------------------------------------------------
-
     async def start(self):
         if not self._built:
             raise RuntimeError("Site must be built before start()")
@@ -126,14 +122,15 @@ class SiteController:
             task = asyncio.create_task(proto.run_server())
             self._tasks.append(task)
 
-        # Start engine
-        engine_task = asyncio.create_task(self.engine.run())
-        self._tasks.append(engine_task)
+        # Only run engine loop in real-time mode
+        if self.clock.real_time:
+            engine_task = asyncio.create_task(self.engine.run())
+            self._tasks.append(engine_task)
 
-        try:
-            await asyncio.gather(*self._tasks)
-        except asyncio.CancelledError:
-            logger.info("Site tasks cancelled")
+            try:
+                await asyncio.gather(*self._tasks)
+            except asyncio.CancelledError:
+                logger.info("Site tasks cancelled")
 
     async def stop(self):
         if not self._running:

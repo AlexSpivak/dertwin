@@ -39,6 +39,7 @@ class EnergyMeterSimulator(SimulatedDevice):
         # Internal state cache
         self._grid_kw = 0.0
         self._pf = 0.99
+        self._last_applied_commands = {}
 
     # --------------------------------------------------
     # Simulation step
@@ -95,3 +96,6 @@ class EnergyMeterSimulator(SimulatedDevice):
     def apply_commands(self, commands: Dict[str, float]) -> Dict[str, float]:
         # Meter is passive — no control effect
         return {}
+
+    def init_applied_commands(self, commands: Dict[str, float]):
+        self._last_applied_commands = dict(commands or {})

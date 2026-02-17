@@ -31,6 +31,7 @@ class InverterSimulator(SimulatedDevice):
 
         self.fault_code = 0
         self.telemetry = {}
+        self._last_applied_commands = {}
 
     # ---------------------------------------------------------
     # External control inputs
@@ -121,3 +122,6 @@ class InverterSimulator(SimulatedDevice):
         for k, v in commands.items():
             applied[k] = v
         return applied
+
+    def init_applied_commands(self, commands: Dict[str, float]):
+        self._last_applied_commands = dict(commands or {})

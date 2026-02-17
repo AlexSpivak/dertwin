@@ -21,14 +21,25 @@ class DeviceController:
 
         self._last_commands: Dict[str, float] = {}
 
+        self._last_commands: Dict[str, float] = {}
+        self._initialized = False
+
     def step(self, dt: float):
         commands = self.collect_commands()
 
-        if commands and commands != self._last_commands:
+        # First run: initialize baseline without applying
+        if not self._initialized:
+            self._last_commands = dict(commands)
+            self.device.init_applied_commands(commands)
+            self._initialized = True
+
+        elif commands and commands != self._last_commands:
             applied = self.device.apply_commands(commands)
             self.write_protocol_commands(applied)
-            self._last_commands = commands
+            self._last_commands = dict(commands)
+
         self.device.update(dt)
+
         telemetry = self.device.get_telemetry()
         self.apply_telemetry(telemetry)
 

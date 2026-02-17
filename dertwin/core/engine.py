@@ -15,28 +15,51 @@ class SimulationEngine:
         self._tick_count = 0
 
     async def run(self):
+        """
+        Infinite loop — ONLY used in real_time mode.
+        """
+        if not self.clock.real_time:
+            raise RuntimeError(
+                "Engine.run() should not be used in deterministic mode"
+            )
+
         logger.info(
             "Simulation engine started | step=%.3fs",
             self.clock.step,
         )
 
         self._running = True
-        dt = self.clock.step
 
         while self._running:
-            for device in self.devices:
-                device.step(dt)
+            await self.step_once()
 
-            self._tick_count += 1
+        logger.info("Simulation engine stopped")
 
-            if self._tick_count % 100 == 0:
-                logger.info(
-                    "Simulation tick | t=%.2fs | ticks=%d",
-                    self.clock.time,
-                    self._tick_count,
-                )
+    # ---------------------------------------------------------
+    # SINGLE STEP (Deterministic Safe)
+    # ---------------------------------------------------------
 
-            await self.clock.tick()
+    async def step_once(self):
+        """
+        Execute exactly one simulation tick.
+        Safe for deterministic testing.
+        """
+
+        dt = self.clock.step
+
+        for device in self.devices:
+            device.step(dt)
+
+        self._tick_count += 1
+
+        if self._tick_count % 100 == 0:
+            logger.info(
+                "Simulation tick | t=%.2fs | ticks=%d",
+                self.clock.time,
+                self._tick_count,
+            )
+
+        await self.clock.tick()
 
         logger.info("Simulation engine stopped")
 

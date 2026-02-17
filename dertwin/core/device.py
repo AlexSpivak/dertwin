@@ -15,3 +15,7 @@ class SimulatedDevice(ABC):
     @abstractmethod
     def apply_commands(self, commands: Dict[str, float]) -> Dict[str, float]:
         pass
+
+    @abstractmethod
+    def init_applied_commands(self, commands: Dict[str, float]) -> Dict[str, float]:
+        pass

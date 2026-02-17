@@ -297,7 +297,7 @@ class BESSSimulator(SimulatedDevice):
                 self.power_control_mode = int(val)
                 applied[name] = self.power_control_mode
 
-            elif name == "on_grid_power":
+            elif name == "on_grid_power_setpoint":
                 # accept float and store
                 self.set_on_grid_power_kw(float(val))
                 applied[name] = self.on_grid_power_kw
