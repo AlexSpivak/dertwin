@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from pymodbus.datastore import ModbusServerContext, ModbusSequentialDataBlock, ModbusDeviceContext
 from pymodbus.server import StartAsyncTcpServer
@@ -163,13 +164,44 @@ class ModbusSimulator:
 
         self.context = ModbusServerContext(
             devices={unit_id: device_context},
-            single=False
+            single=False,
         )
+
+        self._task: Optional[asyncio.Task] = None
+
+    # ---------------------------------------------------------
 
     async def run_server(self):
         logger.info(
-            "Modbus device started | port=%s | unit_id=%s",
+            "Starting Modbus server | %s:%s | unit=%s",
+            self.address,
             self.port,
             self.unit_id,
         )
-        await StartAsyncTcpServer(context=self.context, address=(self.address, self.port))
+
+        # Run blocking server in background
+        self._task = asyncio.create_task(
+            StartAsyncTcpServer(
+                context=self.context,
+                address=(self.address, self.port),
+            )
+        )
+
+    # ---------------------------------------------------------
+
+    async def shutdown(self):
+        if self._task:
+            logger.info(
+                "Stopping Modbus server | %s:%s",
+                self.address,
+                self.port,
+            )
+
+            self._task.cancel()
+
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+            self._task = None

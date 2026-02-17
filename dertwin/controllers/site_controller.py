@@ -19,19 +19,25 @@ logger = logging.getLogger(__name__)
 class SiteController:
     """
     Config-driven site runtime orchestrator.
+    Fully owns lifecycle of engine + protocols.
     """
 
     def __init__(self, config: Dict):
         self.config = config
         self.register_map_root = Path(config.get("register_map_root", "."))
 
-        self.clock = SimulationClock(step=config.get("step", 0.1))
+        self.clock = SimulationClock(
+            step=config.get("step", 0.1),
+            real_time=config.get("real_time", True),
+        )
+
         self.engine: Optional[SimulationEngine] = None
-
         self.controllers: List[DeviceController] = []
-        self.protocols: List = []
+        self.protocols: List[ModbusSimulator] = []
 
+        self._tasks: List[asyncio.Task] = []
         self._built = False
+        self._running = False
 
     # ------------------------------------------------------------------
     # BUILD
@@ -43,19 +49,13 @@ class SiteController:
         devices_by_type: Dict[str, List] = {}
         devices: List = []
 
-        # ---------------------------------------
         # Create devices
-        # ---------------------------------------
-
         for asset in self.config["assets"]:
             device = self._create_device(asset)
             devices.append(device)
             devices_by_type.setdefault(asset["type"], []).append(device)
 
-        # ---------------------------------------
-        # Wire cross dependencies
-        # ---------------------------------------
-
+        # Cross-wire dependencies
         bess_devices = devices_by_type.get("bess", [])
         inverter_devices = devices_by_type.get("inverter", [])
         meter_devices = devices_by_type.get("energy_meter", [])
@@ -69,48 +69,37 @@ class SiteController:
                     bs.commanded_power_kw * 1000.0 for bs in b
                 )
 
-        # ---------------------------------------
         # Create controllers + protocols
-        # ---------------------------------------
-
         for asset, device in zip(self.config["assets"], devices):
 
             for proto_cfg in asset.get("protocols", []):
 
-                if proto_cfg["kind"] == "modbus_tcp":
+                if proto_cfg["kind"] != "modbus_tcp":
+                    raise ValueError(f"Unsupported protocol kind: {proto_cfg['kind']}")
 
-                    map_file = proto_cfg["register_map"]
-                    map_path = Path(map_file)
-                    if not map_path.is_absolute():
-                        map_path = self.register_map_root / map_path
+                map_path = Path(proto_cfg["register_map"])
+                if not map_path.is_absolute():
+                    map_path = self.register_map_root / map_path
 
-                    register_map = RegisterMap.from_yaml(map_path)
+                register_map = RegisterMap.from_yaml(map_path)
 
-                    modbus = ModbusSimulator(
-                        address=proto_cfg["ip"],
-                        port=proto_cfg["port"],
-                        unit_id=proto_cfg.get("unit_id", 1),
-                    )
+                modbus = ModbusSimulator(
+                    address=proto_cfg["ip"],
+                    port=proto_cfg["port"],
+                    unit_id=proto_cfg.get("unit_id", 1),
+                )
 
-                    self.protocols.append(modbus)
+                self.protocols.append(modbus)
 
-                    controller = DeviceController(
-                        device=device,
-                        protocols=[modbus],
-                        register_map=register_map,
-                    )
+                controller = DeviceController(
+                    device=device,
+                    protocols=[modbus],
+                    register_map=register_map,
+                )
 
-                    self.controllers.append(controller)
+                self.controllers.append(controller)
 
-                else:
-                    raise ValueError(
-                        f"Unsupported protocol kind: {proto_cfg['kind']}"
-                    )
-
-        # ---------------------------------------
-        # Create engine
-        # ---------------------------------------
-
+        # Engine
         self.engine = SimulationEngine(
             devices=self.controllers,
             clock=self.clock,
@@ -126,24 +115,49 @@ class SiteController:
         if not self._built:
             raise RuntimeError("Site must be built before start()")
 
+        if self._running:
+            return
+
         logger.info("Starting site runtime")
+        self._running = True
 
-        protocol_tasks = [
-            asyncio.create_task(proto.run_server())
-            for proto in self.protocols
-        ]
+        # Start protocol servers
+        for proto in self.protocols:
+            task = asyncio.create_task(proto.run_server())
+            self._tasks.append(task)
 
-        await asyncio.gather(
-            self.engine.run(),
-            *protocol_tasks,
-        )
+        # Start engine
+        engine_task = asyncio.create_task(self.engine.run())
+        self._tasks.append(engine_task)
 
-    def stop(self) -> None:
+        try:
+            await asyncio.gather(*self._tasks)
+        except asyncio.CancelledError:
+            logger.info("Site tasks cancelled")
+
+    async def stop(self):
+        if not self._running:
+            return
+
+        logger.info("Stopping site runtime")
+
+        # Stop engine loop
         if self.engine:
             self.engine.stop()
 
-    # ------------------------------------------------------------------
-    # Helpers
+        # Graceful protocol shutdown
+        for proto in self.protocols:
+            await proto.shutdown()
+
+        # Cancel remaining tasks
+        for task in self._tasks:
+            task.cancel()
+
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+
+        self._tasks.clear()
+        self._running = False
+
     # ------------------------------------------------------------------
 
     def _create_device(self, asset_cfg: Dict):
@@ -162,8 +176,3 @@ class SiteController:
             )
 
         raise ValueError(f"Unknown asset type: {dtype}")
-
-    def _all_devices(self, devices_by_type: Dict[str, List]):
-        for dtype in devices_by_type:
-            for dev in devices_by_type[dtype]:
-                yield dev
