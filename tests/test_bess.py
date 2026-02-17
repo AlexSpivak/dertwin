@@ -41,7 +41,7 @@ def test_realistic_charge_discharge_cycle():
     bess.soc = 50
     dt = 0.1
     # Phase 1: discharge 20 kW for 30 simulated minutes → SOC must drop
-    bess.apply_commands({"on_grid_power": 20})
+    bess.apply_commands({"on_grid_power_setpoint": 20})
     for _ in range(int((30 * 60) / dt)):
         bess.update(dt=dt)
     mid_soc = bess.soc
@@ -52,7 +52,7 @@ def test_realistic_charge_discharge_cycle():
     assert 39 < mid_soc < 41
 
     # Phase 2: charge 20 kW for 30 minutes → SOC must recover
-    bess.apply_commands({"on_grid_power": -20})
+    bess.apply_commands({"on_grid_power_setpoint": -20})
     for _ in range(int((30 * 60) / dt)):
         bess.update(dt)
     final_soc = bess.soc
@@ -93,7 +93,7 @@ def test_command_on_grid_power_respects_limits():
     bess = BESSSimulator(ramp_rate_kw_per_s=100.0)
 
     # send +100 kW command
-    bess.apply_commands({"on_grid_power": 100})
+    bess.apply_commands({"on_grid_power_setpoint": 100})
     bess.update(dt=0.1)
     assert bess.commanded_power_kw == 10  # with ramp 100 from 0 to +10 in 0.1 sec
 
@@ -105,7 +105,7 @@ def test_command_on_grid_power_respects_limits():
     # -----------------------
 
     # command -100 kW
-    bess.apply_commands({"on_grid_power": -100})
+    bess.apply_commands({"on_grid_power_setpoint": -100})
     bess.update(dt=0.1)
     assert bess.commanded_power_kw == 10  # ramp 10kW back toward 0 (20 → 10)
 
@@ -162,7 +162,7 @@ def test_stop_prevents_on_grid_power_override():
     bess = BESSSimulator(ramp_rate_kw_per_s=5.0)
 
     # First write initial power
-    bess.apply_commands({"on_grid_power": 50})
+    bess.apply_commands({"on_grid_power_setpoint": 50})
     bess.update(dt=0.1)
     first_power = bess.commanded_power_kw
     assert first_power != 0
@@ -173,10 +173,10 @@ def test_stop_prevents_on_grid_power_override():
     assert bess.mode == "idle"
     assert bess.commanded_power_kw == 0
 
-    # Write instructions dict again, but without changing on_grid_power.
+    # Write instructions dict again, but without changing on_grid_power_setpoint.
     # Should NOT reapply the 50 kW command.
     bess.apply_commands({
-        "on_grid_power": 50,  # unchanged!
+        "on_grid_power_setpoint": 50,  # unchanged!
         "start_stop_standby": 2
     })
 

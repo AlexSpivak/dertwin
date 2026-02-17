@@ -24,7 +24,7 @@ BESS_REGISTERS = [
         scale=1.0,
     ),
     RegisterDefinition(
-        name="on_grid_power",
+        name="on_grid_power_setpoint",
         address=10126,
         func=0x10,
         direction=RegisterDirection.WRITE,
@@ -46,6 +46,8 @@ def test_controller_forwards_commands_to_bess():
         register_map=BESS_MAP,
     )
 
+    # init step
+    controller.step(dt=0.1)
     controller.write_protocol_commands({"start_stop_standby": 1})
     controller.step(dt=0.1)
 
@@ -64,7 +66,9 @@ def test_controller_bess_ramp_flow():
         register_map=BESS_MAP,
     )
 
-    controller.write_protocol_commands({"on_grid_power": 50.0})
+    # init step
+    controller.step(dt=0.1)
+    controller.write_protocol_commands({"on_grid_power_setpoint": 50.0})
 
     for _ in range(100):
         controller.step(dt=0.1)
@@ -82,7 +86,9 @@ def test_controller_bess_applies_only_on_change():
         register_map=BESS_MAP,
     )
 
-    controller.write_protocol_commands({"on_grid_power": 10})
+    # init step
+    controller.step(dt=0.1)
+    controller.write_protocol_commands({"on_grid_power_setpoint": 10})
     controller.step(dt=0.1)
 
     assert bess.on_grid_power_kw == 10
@@ -90,7 +96,7 @@ def test_controller_bess_applies_only_on_change():
     controller.step(dt=0.1)
     assert bess.on_grid_power_kw == 10
 
-    controller.write_protocol_commands({"on_grid_power": 20})
+    controller.write_protocol_commands({"on_grid_power_setpoint": 20})
     controller.step(dt=0.1)
 
     assert bess.on_grid_power_kw == 20
