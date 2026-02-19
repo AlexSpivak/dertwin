@@ -1,11 +1,11 @@
 import asyncio
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from pymodbus.datastore import ModbusServerContext, ModbusSequentialDataBlock, ModbusDeviceContext
 from pymodbus.server import StartAsyncTcpServer
 
-from dertwin.devices.device import DeviceSimulator
+from dertwin.core.registers import RegisterDefinition, RegisterDirection
 
 logger = logging.getLogger(__name__)
 
@@ -44,145 +44,164 @@ def encode_value(value: float, data_type: str, scale: float, count: int) -> List
 
     return [reg_value & 0xFFFF] * count
 
-def write_telemetry_registers(configs, context, unit_id, telemetry):
-    for entry in configs:
-        name = entry["name"]
-        if name not in telemetry:
+
+def write_telemetry_registers(
+    registers: List[RegisterDefinition],
+    context,
+    unit_id: int,
+    telemetry: Dict[str, float],
+):
+    for reg in registers:
+        if reg.direction != RegisterDirection.READ:
             continue
 
-        addr = entry["address"]
-        scale = entry.get("scale", 1.0)
-        dtype = entry.get("type", "uint16")
-        count = entry.get("count", 1)
+        if reg.name not in telemetry:
+            continue
 
-        values = encode_value(telemetry[name], dtype, scale, count)
-        context[unit_id].setValues(4, addr, values)  # input registers
+        values = encode_value(
+            value=telemetry[reg.name],
+            data_type=reg.type,
+            scale=reg.scale,
+            count=reg.count,
+        )
+
+        context[unit_id].setValues(4, reg.address, values)
+
         logger.debug(
             "Telemetry written | unit=%s | register=%s | values=%s",
             unit_id,
-            addr,
+            reg.address,
             values,
         )
 
-def write_command_registers(configs, context, unit_id, commands):
-    for entry in configs:
-        if entry.get("func") not in (0x06, 0x10):
-            continue   # not writable
+def write_command_registers(
+    registers: List[RegisterDefinition],
+    context,
+    unit_id: int,
+    commands: Dict[str, float],
+):
+    for reg in registers:
 
-        name = entry["name"]
-        if name not in commands:
+        if reg.direction != RegisterDirection.WRITE:
             continue
 
-        addr = entry["address"]
-        scale = entry.get("scale", 1.0)
-        dtype = entry.get("type", "uint16")
-        count = entry.get("count", 1)
+        if reg.name not in commands:
+            continue
 
-        values = encode_value(commands[name], dtype, scale, count)
-        context[unit_id].setValues(3, addr, values)  # HR
+        values = encode_value(
+            value=commands[reg.name],
+            data_type=reg.type,
+            scale=reg.scale,
+            count=reg.count,
+        )
+
+        # 3 = Holding Registers
+        context[unit_id].setValues(3, reg.address, values)
+
         logger.debug(
             "Command register written | unit=%s | register=%s | values=%s",
             unit_id,
-            addr,
+            reg.address,
             values,
         )
 
 def collect_write_instructions(
-        configs: List[dict],
-        context: ModbusServerContext,
-        unit_id: int
+    registers: List[RegisterDefinition],
+    context: ModbusServerContext,
+    unit_id: int,
 ) -> Dict[str, float]:
-    """
-    Iterates over configs for writable registers and returns dict {name: value}.
-    Does NOT call device methods, just collects.
-    """
+
     slave = context[unit_id]
-    instructions = {}
+    instructions: Dict[str, float] = {}
 
-    for entry in configs:
-        addr = int(entry["address"])
-        count = int(entry.get("count", 1))
-        scale = float(entry.get("scale", 1.0))
-        data_type = entry.get("type", "uint16")
-        func = entry.get("func", 0x06)  # write holding register
+    for reg in registers:
 
-        # Only consider writable registers (HR, CO)
-        reg_type_code = 3 if func in (0x06, 0x10) else None
-        if reg_type_code is None:
+        if reg.direction != RegisterDirection.WRITE:
             continue
 
         try:
-            raw_values = slave.getValues(reg_type_code, addr, count)
-            raw_value = raw_values[0]
+            raw_values = slave.getValues(3, reg.address, reg.count)
 
-            # Decode signed
-            if data_type == "int16" and raw_value > 0x7FFF:
-                raw_value -= 1 << 16
-            elif data_type == "int32" and count == 2:
+            if reg.count == 1:
+                raw_value = raw_values[0]
+
+                if reg.type == "int16" and raw_value > 0x7FFF:
+                    raw_value -= 1 << 16
+
+            elif reg.count == 2:
                 raw_value = (raw_values[0] << 16) + raw_values[1]
-                if entry.get("type") == "int32" and raw_value > 0x7FFFFFFF:
-                    raw_value -= 1 << 32
 
-            instructions[entry["name"]] = raw_value * scale
+                if reg.type == "int32" and raw_value > 0x7FFFFFFF:
+                    raw_value -= 1 << 32
+            else:
+                raw_value = raw_values[0]
+
+            instructions[reg.name] = raw_value * reg.scale
+
             logger.debug(
                 "Collected write instruction | name=%s | value=%s",
-                entry["name"],
-                instructions[entry["name"]],
+                reg.name,
+                instructions[reg.name],
             )
-
 
         except Exception as e:
             logger.warning(
                 "Failed to read writable register | name=%s | addr=%s | error=%s",
-                entry["name"],
-                addr,
+                reg.name,
+                reg.address,
                 e,
             )
-            continue
 
     return instructions
 
 
 class ModbusSimulator:
-    def __init__(self, port: int, unit_id: int, configs: List[dict], device_sim: DeviceSimulator):
+    def __init__(self, address: str, port: int, unit_id: int):
+        self.address = address
         self.port = port
         self.unit_id = unit_id
-        self.configs = configs
-        self.device_sim = device_sim
         device_context = create_device_context()
 
         self.context = ModbusServerContext(
             devices={unit_id: device_context},
-            single=False
+            single=False,
         )
 
+        self._task: Optional[asyncio.Task] = None
+
+    # ---------------------------------------------------------
+
     async def run_server(self):
-        asyncio.create_task(self.update_loop())
         logger.info(
-            "Modbus device started | port=%s | unit_id=%s",
+            "Starting Modbus server | %s:%s | unit=%s",
+            self.address,
             self.port,
             self.unit_id,
         )
-        await StartAsyncTcpServer(context=self.context, address=("0.0.0.0", self.port))
 
-    async def update_loop(self):
-        # collect empty instructions at the beginning of the loop to avoid overwriting preset metrics
-        prev_instructions = collect_write_instructions(self.configs, self.context, self.unit_id)
-        self.device_sim.init_applied_commands(prev_instructions)
-        interval = 0.1 # simulation interval use it as minimal for fast responsiveness
-        while True:
-            write_instructions = collect_write_instructions(self.configs, self.context, self.unit_id)
-            if write_instructions and write_instructions != prev_instructions:
-                applied = self.device_sim.execute_write_instructions(write_instructions)
-                write_command_registers(self.configs, self.context, self.unit_id, applied)
-                logger.info("Command update applied | %s", applied)
-                prev_instructions = write_instructions
-
-            vals = self.device_sim.simulate_values(interval)
-            write_telemetry_registers(self.configs, self.context, self.unit_id, vals)
-            logger.debug(
-                "Simulation tick | port=%s | produced telemetry=%s",
-                self.port,
-                vals,
+        # Run blocking server in background
+        self._task = asyncio.create_task(
+            StartAsyncTcpServer(
+                context=self.context,
+                address=(self.address, self.port),
             )
-            await asyncio.sleep(interval)
+        )
+
+    # ---------------------------------------------------------
+
+    async def shutdown(self):
+        if self._task:
+            logger.info(
+                "Stopping Modbus server | %s:%s",
+                self.address,
+                self.port,
+            )
+
+            self._task.cancel()
+
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+            self._task = None

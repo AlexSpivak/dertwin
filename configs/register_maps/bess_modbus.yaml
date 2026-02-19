@@ -1,0 +1,317 @@
+protocol: modbus_tcp
+device_type: bess
+description: "BESS Modbus register map"
+
+registers:
+
+  # ==========================================================
+  # TELEMETRY (READ)
+  # ==========================================================
+
+  # ----------------------
+  # System Info
+  # ----------------------
+
+  - name: service_voltage
+    address: 32000
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
+
+  - name: service_current
+    address: 32001
+    func: 0x04
+    direction: read
+    type: int16
+    count: 1
+    scale: 0.1
+    unit: A
+
+  - name: system_soc
+    address: 32002
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: "%"
+
+  - name: battery_temperature
+    address: 32184
+    func: 0x04
+    direction: read
+    type: int16
+    count: 1
+    scale: 0.1
+    unit: degC
+
+  # ----------------------
+  # Cumulative Energy
+  # ----------------------
+
+  - name: total_charge_energy
+    address: 32013
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: kWh
+
+  - name: total_discharge_energy
+    address: 32014
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: kWh
+
+  # ----------------------
+  # AC Side Power
+  # ----------------------
+
+  - name: active_power
+    address: 10059
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: kW
+
+  - name: reactive_power
+    address: 10281
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: kvar
+
+  - name: apparent_power
+    address: 10283
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: kVA
+
+  # ----------------------
+  # Limits
+  # ----------------------
+
+  - name: max_charge_power
+    address: 10272
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.01
+    unit: kW
+
+  - name: max_discharge_power
+    address: 10273
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.01
+    unit: kW
+
+  # ----------------------
+  # Faults / Status
+  # ----------------------
+
+  - name: working_status
+    address: 10050
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ""
+
+  - name: fault_code
+    address: 32108
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ""
+
+  # ----------------------
+  # Advanced Telemetry
+  # ----------------------
+
+  - name: charge_and_discharge_cycles
+    address: 32021
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: cycles
+
+  - name: system_soh
+    address: 32004
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: "%"
+
+  - name: available_charging_power
+    address: 10130
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 1
+    unit: kW
+
+  - name: available_discharging_power
+    address: 10132
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 1
+    unit: kW
+
+  - name: on_grid_power
+    address: 10126
+    func: 0x03
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: kW
+
+  - name: grid_frequency
+    address: 10245
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.01
+    unit: Hz
+
+
+  # ==========================================================
+  # COMMANDS (WRITE)
+  # ==========================================================
+
+  # ----------------------
+  # Start / Stop
+  # ----------------------
+
+  - name: start_stop_standby
+    address: 10055
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    options:
+      1: Power On
+      2: Power Off
+      3: Standby
+
+  # ----------------------
+  # Local / Remote
+  # ----------------------
+
+  - name: local_remote_settings
+    address: 10057
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    options:
+      0: Local/Remote
+      1: Remote
+      2: Local
+
+  # ----------------------
+  # Power Control Mode
+  # ----------------------
+
+  - name: power_control_mode
+    address: 10125
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    description: "0: Default, 1: On-grid, 2: Off-grid, etc."
+
+  # ----------------------
+  # Active Power Setpoint (kW)
+  # ----------------------
+
+  - name: on_grid_power_setpoint
+    address: 10126
+    func: 0x10
+    direction: write
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: kW
+    description: "Positive = discharge, Negative = charge"
+
+  # ----------------------
+  # Fault Reset
+  # ----------------------
+
+  - name: fault_reset
+    address: 11004
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    description: "Write 1 to reset faults"
+
+  # ----------------------
+  # SOC Limits
+  # ----------------------
+
+  - name: soc_upper_limit_2
+    address: 10325
+    func: 0x10
+    direction: write
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: "%"
+
+  - name: soc_upper_limit_1
+    address: 10327
+    func: 0x10
+    direction: write
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: "%"
+
+  - name: soc_lower_limit_1
+    address: 10330
+    func: 0x10
+    direction: write
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: "%"
+
+  - name: soc_lower_limit_2
+    address: 10332
+    func: 0x10
+    direction: write
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: "%"

@@ -1,127 +1,127 @@
-import math
-import random
-from datetime import datetime
-from typing import Dict, Optional
-
-from dertwin.devices.device import DeviceSimulator
+from typing import Dict
+from dertwin.core.device import SimulatedDevice
 
 
-# -------------------------
-# PV Simulator
-# -------------------------
-class InverterSimulator(DeviceSimulator):
-    def __init__(self, rated_kw: float = 10.0, interval: float = 0.1):
+class InverterSimulator(SimulatedDevice):
+    def __init__(self, rated_kw: float = 10.0, ambient_temp_c: float = 20.0):
         super().__init__()
 
-        # Power ratings
+        # Ratings
         self.rated_power_w = rated_kw * 1000.0
+        self.efficiency = 0.97
 
-        # Temperature model
-        self.inverter_temp_c = 30.0
-        self.thermal_mass = 20000.0  # J/K (tunable)
-        self.cooling_coeff = 10.0  # W/K (tunable)
-        self.heat_fraction = 0.01  # 1% of electrical power -> heat
-        self.ambient_temp = 20.0
-        self.efficiency = 0.97  # optional if you prefer (heat_fraction = 1-eff)
+        # External input (must be set by EMS / simulation driver)
+        self.irradiance_factor = 0.0  # 0..1
 
-        # Internal storage of last simulation
-        self.total_active_power_latest: float = 0.0
-        self.today_energy = 0.0
-        self.cumulative_energy = 0.0
-        self.dt = interval
+        # Thermal model
+        self.temperature_c = 30.0
+        self.ambient_temp_c = ambient_temp_c
+        self.thermal_mass = 20000.0
+        self.cooling_coeff = 10.0
+
+        # Energy counters
+        self.today_energy_kwh = 0.0
+        self.lifetime_energy_kwh = 0.0
+
+        # Electrical state
+        self.active_power_w = 0.0
+        self.grid_voltage = 230.0
+        self.grid_frequency = 50.0
+        self.power_factor = 1.0
+
+        self.fault_code = 0
+        self.telemetry = {}
+        self._last_applied_commands = {}
 
     # ---------------------------------------------------------
-    def get_solar_factor(self, now=None) -> float:
-        if now is None:
-            now = datetime.now()
-        hour = now.hour + now.minute / 60
-        sunrise = 6.0
-        sunset = 21.0
-        if hour < sunrise or hour > sunset:
-            return 0.0
-        x = (hour - sunrise) / (sunset - sunrise) * math.pi
-        base = math.sin(x)
-        variability = random.uniform(0.95, 1.05)
-        return max(0.0, base * variability)
+    # External control inputs
+    # ---------------------------------------------------------
 
-    def update_temperature(self, power_w: float, dt: float = 2.0, ambient: float = None):
-        if ambient is None:
-            ambient = self.ambient_temp
+    def set_irradiance(self, factor: float):
+        """Set normalized irradiance 0..1"""
+        self.irradiance_factor = max(0.0, min(1.0, float(factor)))
 
-        # fraction of electrical power converted to heat (tunable)
-        heat_fraction = self.heat_fraction
+    def set_grid_conditions(self, voltage: float, frequency: float):
+        self.grid_voltage = float(voltage)
+        self.grid_frequency = float(frequency)
 
-        # prefer using inverter efficiency if available:
-        eff = self.efficiency
-        heat_fraction = 1.0 - eff  # e.g. 0.03 if eff=0.97
-        # Joule/heat power (W)
+    # ---------------------------------------------------------
+    # Thermal model
+    # ---------------------------------------------------------
+
+    def update_temperature(self, power_w: float, dt: float):
+        heat_fraction = 1.0 - self.efficiency
         heat_power = heat_fraction * abs(power_w)
 
-        # Cooling power (W) proportional to temperature difference
-        cooling_power = self.cooling_coeff * max(0.0, self.inverter_temp_c - ambient)
+        cooling_power = self.cooling_coeff * max(
+            0.0, self.temperature_c - self.ambient_temp_c
+        )
 
-        # Temperature change (°C): dT = (heat_power - cooling_power) * dt / C
         delta_t = (heat_power - cooling_power) * dt / self.thermal_mass
-        self.inverter_temp_c += delta_t
+        self.temperature_c += delta_t
 
-        # Prevent unrealistic values; don't go below ambient
-        self.inverter_temp_c = max(ambient, min(80.0, self.inverter_temp_c))
-        return self.inverter_temp_c
+        self.temperature_c = max(
+            self.ambient_temp_c, min(80.0, self.temperature_c)
+        )
 
-    # ---------------------------------------------------------
-    def simulate_values(self, dt: Optional[float]) -> Dict[str, float]:
-        self.reset_daily_counters()
+    def update(self, dt: float) -> None:
+        dt = float(dt)
 
-        # Solar irradiance factor 0–1
-        factor = self.get_solar_factor()
+        # PV input
+        input_w = self.rated_power_w * self.irradiance_factor
 
-        # Power generation (W)
-        total_input_w = self.rated_power_w * factor
-        efficiency = 0.97
-        output_w = total_input_w * efficiency
+        # AC output
+        output_w = input_w * self.efficiency
+        self.active_power_w = output_w
 
-        # Grid parameters
-        grid_voltage = 230 + random.uniform(-1.5, 1.5)
-        grid_frequency = 50 + random.uniform(-0.03, 0.03)
+        # Energy integration
+        dt_h = dt / 3600.0
+        delta_kwh = (output_w / 1000.0) * dt_h
 
-        power_factor = 1.0 if output_w < 100 else 0.98 + random.uniform(-0.005, 0.005)
+        self.today_energy_kwh += delta_kwh
+        self.lifetime_energy_kwh += delta_kwh
 
-        # Temperature update
-        self.inverter_temp_c = self.update_temperature(output_w, self.dt)
+        # Temperature
+        self.update_temperature(output_w, dt)
 
-        # Energy update
-        energy_increment_kwh = (output_w / 1000.0) * (self.dt / 3600.0)
-        self.today_energy += energy_increment_kwh
-        self.cumulative_energy += energy_increment_kwh
+        # Derived values
+        current = (
+            output_w / self.grid_voltage
+            if self.grid_voltage > 0
+            else 0.0
+        )
 
-        # Inverter status
+        self.power_factor = 1.0 if output_w < 100 else 0.98
+
         status = 1 if output_w > 50 else 0
 
-        self.total_active_power_latest = output_w
-
-        # Store last simulation values
-        return {
-            'inverter_status': status,
-            'total_input_power': total_input_w,
-            'total_active_power': output_w,
-            'grid_frequency': grid_frequency,
-            'phase_neutral_voltage_1': grid_voltage,
-            'phase_current_1': output_w / grid_voltage if grid_voltage > 0 else 0,
-            'phase_active_power_1': output_w,
-            'today_output_energy': self.today_energy,
-            'lifetime_output_energy': self.cumulative_energy,
-            'temp_inverter': self.inverter_temp_c,
-            'power_factor': power_factor,
-            'fault_code': 0,
+        self.telemetry = {
+            "inverter_status": status,
+            "total_input_power": input_w,
+            "total_active_power": output_w,
+            "grid_frequency": self.grid_frequency,
+            "phase_neutral_voltage_1": self.grid_voltage,
+            "phase_current_1": current,
+            "phase_active_power_1": output_w,
+            "today_output_energy": self.today_energy_kwh,
+            "lifetime_output_energy": self.lifetime_energy_kwh,
+            "temp_inverter": self.temperature_c,
+            "power_factor": self.power_factor,
+            "fault_code": self.fault_code,
         }
-    def get_pv_watts(self) -> float:
-        """Return last simulated PV output (W) without re-simulating."""
-        return self.total_active_power_latest
 
-    def execute_write_instructions(self, instructions: dict) -> dict:
-        """Dummy executor: simply returns instructions as applied (no effect)."""
-        return {k: v for k, v in instructions.items()}
+    def get_telemetry(self) -> Dict[str, float]:
+        return self.telemetry
+
+    # ---------------------------------------------------------
+    # Command handler (placeholder for Modbus writes)
+    # ---------------------------------------------------------
+
+    def apply_commands(self, commands: Dict[str, float]) -> Dict[str, float]:
+        applied = {}
+        for k, v in commands.items():
+            applied[k] = v
+        return applied
 
     def init_applied_commands(self, commands: Dict[str, float]):
-        # we can implement it later
-        pass
+        self._last_applied_commands = dict(commands or {})
