@@ -1,12 +1,13 @@
+import math
 from dataclasses import dataclass
 
 
 @dataclass
 class BatteryLimits:
-    soc_min: float = 5.0
-    soc_max: float = 95.0
-    soc_recovery_min: float = 7.0
-    soc_recovery_max: float = 93.0
+    soc_lower_limit_1: float = 25.0
+    soc_lower_limit_2: float = 20.0
+    soc_upper_limit_1: float = 85.0
+    soc_upper_limit_2: float = 90.0
 
 
 class BatteryModel:
@@ -21,124 +22,121 @@ class BatteryModel:
         self,
         capacity_kwh: float,
         initial_soc: float = 50.0,
-        charge_efficiency: float = 0.98,
-        discharge_efficiency: float = 0.98,
+        round_trip_eff: float = 0.92,
+        internal_resistance: float = 0.05,
+        ambient_temp_c: float = 20.0,
         limits: BatteryLimits | None = None,
     ):
         self.capacity_kwh = capacity_kwh
-        self.energy_kwh = capacity_kwh * (initial_soc / 100.0)
+        self.energy_kwh = capacity_kwh * initial_soc / 100.0
 
-        self.charge_efficiency = charge_efficiency
-        self.discharge_efficiency = discharge_efficiency
+        self.round_trip_eff = round_trip_eff
+        self.charge_eff = math.sqrt(round_trip_eff)
+        self.discharge_eff = math.sqrt(round_trip_eff)
+
+        self.internal_resistance = internal_resistance
+        self.ambient_temp_c = ambient_temp_c
+
+        self.temperature_c = 25.0
+        self.thermal_capacity_j_per_k = 5000.0
+        self.thermal_conductance_w_per_k = 0.5
+
+        self.charge_energy_total_kwh = 0.0
+        self.discharge_energy_total_kwh = 0.0
+
+        self.soh = 100.0
+        self.cycles = 0.0
 
         self.limits = limits or BatteryLimits()
 
-        self._charge_blocked = False
-        self._discharge_blocked = False
-
-    # ---------------------------------------------------------
-    # Public properties
-    # ---------------------------------------------------------
+    # -------------------------------------------------
+    # Core properties
+    # -------------------------------------------------
 
     @property
     def soc(self) -> float:
         return 100.0 * self.energy_kwh / self.capacity_kwh
 
-    @property
-    def is_charge_allowed(self) -> bool:
-        return not self._charge_blocked
+    # -------------------------------------------------
+    # Voltage model
+    # -------------------------------------------------
 
-    @property
-    def is_discharge_allowed(self) -> bool:
-        return not self._discharge_blocked
+    def open_circuit_voltage(self) -> float:
+        base_voltage = 700.0
+        soc_factor = 1.0 + 0.1 * math.sin((self.soc / 100.0) * math.pi)
+        return base_voltage * soc_factor
 
-    # ---------------------------------------------------------
-    # Core physics step
-    # ---------------------------------------------------------
+    def terminal_voltage(self, power_kw: float) -> float:
+        voc = self.open_circuit_voltage()
+        current = (power_kw * 1000.0 / voc) if voc else 0.0
+        v = voc - abs(current) * self.internal_resistance
+        return max(500.0, v)
 
-    def step(self, power_kw: float, dt_seconds: float) -> float:
-        """
-        power_kw:
-            + → charging
-            - → discharging
+    def current(self, power_kw: float) -> float:
+        v = self.terminal_voltage(power_kw)
+        return (power_kw * 1000.0 / v) if v else 0.0
 
-        Returns actual applied power (after limits).
-        """
+    # -------------------------------------------------
+    # Thermal model
+    # -------------------------------------------------
 
-        dt_hours = dt_seconds / 3600.0
-        applied_power = power_kw
+    def update_temperature(self, power_kw: float, dt: float):
+        I = abs(self.current(power_kw))
+        joule = I * I * self.internal_resistance * dt
+        Tdiff = max(0.0, self.temperature_c - self.ambient_temp_c)
+        cooling = self.thermal_conductance_w_per_k * Tdiff * dt
 
-        # -------------------------------------------------
-        # CHARGING
-        # -------------------------------------------------
-        if power_kw > 0 and not self._charge_blocked:
+        delta_T = (joule - cooling) / self.thermal_capacity_j_per_k
+        self.temperature_c += delta_T
+        self.temperature_c = max(self.ambient_temp_c, min(80.0, self.temperature_c))
 
-            # Max energy allowed until upper limit
-            max_energy = (
-                    self.limits.soc_max / 100.0 * self.capacity_kwh
-                    - self.energy_kwh
-            )
+    # -------------------------------------------------
+    # Energy step (with derating zones)
+    # -------------------------------------------------
 
-            requested_energy = power_kw * dt_hours * self.charge_efficiency
+    def step(self, power_kw: float, dt: float) -> float:
 
-            if requested_energy > max_energy:
-                requested_energy = max_energy
-
-            self.energy_kwh += requested_energy
-
-            if dt_hours > 0:
-                applied_power = requested_energy / (
-                        dt_hours * self.charge_efficiency
-                )
-
-        # -------------------------------------------------
-        # DISCHARGING
-        # -------------------------------------------------
-        elif power_kw < 0 and not self._discharge_blocked:
-
-            min_energy = (
-                    self.limits.soc_min / 100.0 * self.capacity_kwh
-            )
-
-            max_discharge = self.energy_kwh - min_energy
-
-            requested_energy = power_kw * dt_hours / self.discharge_efficiency
-
-            if abs(requested_energy) > max_discharge:
-                requested_energy = -max_discharge
-
-            self.energy_kwh += requested_energy
-
-            if dt_hours > 0:
-                applied_power = requested_energy * self.discharge_efficiency / dt_hours
-
-        else:
-            applied_power = 0.0
-
-        # Physical clamp
-        self.energy_kwh = max(0.0, min(self.capacity_kwh, self.energy_kwh))
-
-        # Update hysteresis after energy change
-        self._update_limits()
-
-        return applied_power
-
-    # ---------------------------------------------------------
-    # Limit logic with hysteresis
-    # ---------------------------------------------------------
-
-    def _update_limits(self):
-
+        dt_h = dt / 3600.0
         soc = self.soc
 
-        # Upper limit
-        if soc >= self.limits.soc_max:
-            self._charge_blocked = True
-        elif soc <= self.limits.soc_recovery_max:
-            self._charge_blocked = False
+        # ---- HARD CUTS ----
+        if power_kw > 0 and soc <= self.limits.soc_lower_limit_2:
+            return 0.0
+        if power_kw < 0 and soc >= self.limits.soc_upper_limit_2:
+            return 0.0
 
-        # Lower limit
-        if soc <= self.limits.soc_min:
-            self._discharge_blocked = True
-        elif soc >= self.limits.soc_recovery_min:
-            self._discharge_blocked = False
+        # ---- SOFT DERATING ----
+        if power_kw > 0 and self.limits.soc_lower_limit_2 < soc < self.limits.soc_lower_limit_1:
+            factor = (soc - self.limits.soc_lower_limit_2) / (
+                self.limits.soc_lower_limit_1 - self.limits.soc_lower_limit_2
+            )
+            power_kw *= max(0.0, min(1.0, factor))
+
+        if power_kw < 0 and self.limits.soc_upper_limit_1 < soc < self.limits.soc_upper_limit_2:
+            factor = (self.limits.soc_upper_limit_2 - soc) / (
+                self.limits.soc_upper_limit_2 - self.limits.soc_upper_limit_1
+            )
+            power_kw *= max(0.0, min(1.0, factor))
+
+        # ---- ENERGY UPDATE ----
+        if power_kw > 0:  # discharge
+            delta_kwh = -(power_kw * self.discharge_eff * dt_h)
+            self.discharge_energy_total_kwh += -delta_kwh
+        elif power_kw < 0:  # charge
+            delta_kwh = -(power_kw * self.charge_eff * dt_h)
+            self.charge_energy_total_kwh += delta_kwh
+        else:
+            delta_kwh = 0.0
+
+        self.energy_kwh = max(
+            0.0,
+            min(self.capacity_kwh, self.energy_kwh + delta_kwh),
+        )
+
+        self.cycles = (
+            self.charge_energy_total_kwh + self.discharge_energy_total_kwh
+        ) / self.capacity_kwh
+
+        self.update_temperature(power_kw, dt)
+
+        return power_kw
