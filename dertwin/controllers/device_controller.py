@@ -47,12 +47,17 @@ class DeviceController:
         merged: Dict[str, float] = {}
 
         for proto in self.protocols:
-            cmds = collect_write_instructions(
+            raw_cmds = collect_write_instructions(
                 self.register_map.writes,
                 proto.context,
                 proto.unit_id,
             )
-            merged.update(cmds)
+
+            for vendor_name, value in raw_cmds.items():
+                reg = self.register_map.get_by_name(vendor_name)
+
+                internal_name = reg.internal_name or reg.name
+                merged[internal_name] = value
 
         return merged
 

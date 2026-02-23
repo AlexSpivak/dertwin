@@ -22,6 +22,7 @@ class RegisterDirection(str, Enum):
 @dataclass(frozen=True)
 class RegisterDefinition:
     name: str
+    internal_name: str
     address: int
     func: int
     direction: RegisterDirection
@@ -85,6 +86,7 @@ class RegisterMap:
 
         return RegisterDefinition(
             name=entry["name"],
+            internal_name=entry["internal_name"],
             address=entry["address"],
             func=entry["func"],
             direction=direction,

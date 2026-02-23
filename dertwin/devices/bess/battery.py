@@ -13,8 +13,6 @@ class BatteryLimits:
 class BatteryModel:
     """
     Deterministic energy-based battery model.
-    No vendor logic.
-    No protocol logic.
     Pure physics + limits.
     """
 
@@ -58,67 +56,42 @@ class BatteryModel:
         return 100.0 * self.energy_kwh / self.capacity_kwh
 
     # -------------------------------------------------
-    # Voltage model
+    # SOC LIMIT LOGIC (NEW)
     # -------------------------------------------------
 
-    def open_circuit_voltage(self) -> float:
-        base_voltage = 700.0
-        soc_factor = 1.0 + 0.1 * math.sin((self.soc / 100.0) * math.pi)
-        return base_voltage * soc_factor
+    def limit_power(self, power_kw: float) -> float:
+        soc = self.soc
+        limits = self.limits
 
-    def terminal_voltage(self, power_kw: float) -> float:
-        voc = self.open_circuit_voltage()
-        current = (power_kw * 1000.0 / voc) if voc else 0.0
-        v = voc - abs(current) * self.internal_resistance
-        return max(500.0, v)
+        # ---- HARD CUTS ----
+        if power_kw > 0 and soc <= limits.soc_lower_limit_2:
+            return 0.0
+        if power_kw < 0 and soc >= limits.soc_upper_limit_2:
+            return 0.0
 
-    def current(self, power_kw: float) -> float:
-        v = self.terminal_voltage(power_kw)
-        return (power_kw * 1000.0 / v) if v else 0.0
+        # ---- SOFT DERATING ----
+        if power_kw > 0 and limits.soc_lower_limit_2 < soc < limits.soc_lower_limit_1:
+            factor = (soc - limits.soc_lower_limit_2) / (
+                limits.soc_lower_limit_1 - limits.soc_lower_limit_2
+            )
+            return power_kw * max(0.0, min(1.0, factor))
 
-    # -------------------------------------------------
-    # Thermal model
-    # -------------------------------------------------
+        if power_kw < 0 and limits.soc_upper_limit_1 < soc < limits.soc_upper_limit_2:
+            factor = (limits.soc_upper_limit_2 - soc) / (
+                limits.soc_upper_limit_2 - limits.soc_upper_limit_1
+            )
+            return power_kw * max(0.0, min(1.0, factor))
 
-    def update_temperature(self, power_kw: float, dt: float):
-        I = abs(self.current(power_kw))
-        joule = I * I * self.internal_resistance * dt
-        Tdiff = max(0.0, self.temperature_c - self.ambient_temp_c)
-        cooling = self.thermal_conductance_w_per_k * Tdiff * dt
-
-        delta_T = (joule - cooling) / self.thermal_capacity_j_per_k
-        self.temperature_c += delta_T
-        self.temperature_c = max(self.ambient_temp_c, min(80.0, self.temperature_c))
+        return power_kw
 
     # -------------------------------------------------
-    # Energy step (with derating zones)
+    # Energy Integration
     # -------------------------------------------------
 
     def step(self, power_kw: float, dt: float) -> float:
 
         dt_h = dt / 3600.0
-        soc = self.soc
 
-        # ---- HARD CUTS ----
-        if power_kw > 0 and soc <= self.limits.soc_lower_limit_2:
-            return 0.0
-        if power_kw < 0 and soc >= self.limits.soc_upper_limit_2:
-            return 0.0
-
-        # ---- SOFT DERATING ----
-        if power_kw > 0 and self.limits.soc_lower_limit_2 < soc < self.limits.soc_lower_limit_1:
-            factor = (soc - self.limits.soc_lower_limit_2) / (
-                self.limits.soc_lower_limit_1 - self.limits.soc_lower_limit_2
-            )
-            power_kw *= max(0.0, min(1.0, factor))
-
-        if power_kw < 0 and self.limits.soc_upper_limit_1 < soc < self.limits.soc_upper_limit_2:
-            factor = (self.limits.soc_upper_limit_2 - soc) / (
-                self.limits.soc_upper_limit_2 - self.limits.soc_upper_limit_1
-            )
-            power_kw *= max(0.0, min(1.0, factor))
-
-        # ---- ENERGY UPDATE ----
         if power_kw > 0:  # discharge
             delta_kwh = -(power_kw * self.discharge_eff * dt_h)
             self.discharge_energy_total_kwh += -delta_kwh
@@ -140,3 +113,23 @@ class BatteryModel:
         self.update_temperature(power_kw, dt)
 
         return power_kw
+
+    # -------------------------------------------------
+    # Thermal
+    # -------------------------------------------------
+
+    def update_temperature(self, power_kw: float, dt: float):
+        voc = self.open_circuit_voltage()
+        current = (power_kw * 1000.0 / voc) if voc else 0.0
+        joule = current * current * self.internal_resistance * dt
+        Tdiff = max(0.0, self.temperature_c - self.ambient_temp_c)
+        cooling = self.thermal_conductance_w_per_k * Tdiff * dt
+
+        delta_T = (joule - cooling) / self.thermal_capacity_j_per_k
+        self.temperature_c += delta_T
+        self.temperature_c = max(self.ambient_temp_c, min(80.0, self.temperature_c))
+
+    def open_circuit_voltage(self) -> float:
+        base_voltage = 700.0
+        soc_factor = 1.0 + 0.1 * math.sin((self.soc / 100.0) * math.pi)
+        return base_voltage * soc_factor

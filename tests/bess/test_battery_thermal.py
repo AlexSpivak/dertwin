@@ -6,9 +6,9 @@ def test_temperature_increases_under_load():
     """
     Validate electro-thermal coupling for a 1-hour discharge.
 
-    We analytically reproduce the exact model order:
-        1) Energy update (SOC changes)
-        2) Current computed from updated SOC
+    Model order:
+        1) Energy update
+        2) Current from updated SOC (via open-circuit voltage)
         3) Joule heating (I²R)
         4) Cooling to ambient
         5) Thermal capacity scaling
@@ -24,59 +24,50 @@ def test_temperature_increases_under_load():
     power_kw = 20.0
 
     # ---------------------------------------------------------
-    # 1) ENERGY UPDATE (matches model step order)
-    # ΔE = -P * η * dt
+    # ENERGY UPDATE
     # ---------------------------------------------------------
-    delta_kwh = -(power_kw * battery.discharge_eff)  # dt_h = 1h
+    dt_h = dt / 3600.0
+    delta_kwh = -(power_kw * battery.discharge_eff * dt_h)
+
     new_energy = max(
         0.0,
         min(battery.capacity_kwh, battery.energy_kwh + delta_kwh),
     )
 
-    # Temporarily apply updated SOC for thermal calculation
     original_energy = battery.energy_kwh
     battery.energy_kwh = new_energy
 
     # ---------------------------------------------------------
-    # 2) CURRENT CALCULATION
-    # I = P / V_terminal
+    # CURRENT CALCULATION (matches model)
+    # I = P / Voc
     # ---------------------------------------------------------
-    I = abs(battery.current(power_kw))
+    voc = battery.open_circuit_voltage()
+    I = abs(power_kw * 1000.0 / voc)
 
     # ---------------------------------------------------------
-    # 3) JOULE HEATING
-    # Q_joule = I² * R * dt
+    # JOULE HEATING
     # ---------------------------------------------------------
-    joule_energy = I * I * battery.internal_resistance * dt
+    joule = I * I * battery.internal_resistance * dt
 
     # ---------------------------------------------------------
-    # 4) COOLING (Newton’s law)
-    # Q_cooling = k * (T - T_ambient) * dt
+    # COOLING
     # ---------------------------------------------------------
     Tdiff = max(0.0, initial_temp - ambient)
-    cooling_energy = battery.thermal_conductance_w_per_k * Tdiff * dt
+    cooling = battery.thermal_conductance_w_per_k * Tdiff * dt
 
     # ---------------------------------------------------------
-    # 5) TEMPERATURE CHANGE
-    # ΔT = (Q_in - Q_out) / C_th
+    # TEMPERATURE UPDATE
     # ---------------------------------------------------------
-    delta_T = (
-        joule_energy - cooling_energy
-    ) / battery.thermal_capacity_j_per_k
-
+    delta_T = (joule - cooling) / battery.thermal_capacity_j_per_k
     expected_temp = initial_temp + delta_T
 
-    # Clamp to physical bounds (model behavior)
-    expected_temp = max(ambient, min(80.0, expected_temp))
-
-    # Restore original energy before actual step
+    # Restore energy before actual step
     battery.energy_kwh = original_energy
 
-    # ---- Run actual model step ----
+    # ---- ACTUAL MODEL STEP ----
     battery.step(power_kw, dt)
 
-    assert battery.temperature_c > initial_temp
-    assert pytest.approx(battery.temperature_c, rel=1e-6) == expected_temp
+    assert battery.temperature_c == pytest.approx(expected_temp, rel=1e-6)
 
 
 def test_temperature_cools_intermediate():

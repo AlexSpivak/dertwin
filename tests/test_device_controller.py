@@ -2,7 +2,7 @@ import pytest
 
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap, RegisterDefinition, RegisterDirection
-from dertwin.devices.bess import BESSSimulator
+from dertwin.devices.bess.simulator import BESSSimulator
 from dertwin.devices.inverter import InverterSimulator
 from dertwin.devices.energy_meter import EnergyMeterSimulator
 from dertwin.devices.grid_frequency import GridFrequencyModel
@@ -16,6 +16,7 @@ from dertwin.protocol.modbus import ModbusSimulator
 BESS_REGISTERS = [
     RegisterDefinition(
         name="start_stop_standby",
+        internal_name="start_stop_standby",
         address=10055,
         func=0x06,
         direction=RegisterDirection.WRITE,
@@ -25,6 +26,7 @@ BESS_REGISTERS = [
     ),
     RegisterDefinition(
         name="on_grid_power_setpoint",
+        internal_name="active_power_setpoint",
         address=10126,
         func=0x10,
         direction=RegisterDirection.WRITE,
@@ -51,7 +53,7 @@ def test_controller_forwards_commands_to_bess():
     controller.write_protocol_commands({"start_stop_standby": 1})
     controller.step(dt=0.1)
 
-    assert bess.mode == "discharge"
+    assert bess.mode == "run"
 
 
 def test_controller_bess_ramp_flow():
@@ -68,6 +70,8 @@ def test_controller_bess_ramp_flow():
 
     # init step
     controller.step(dt=0.1)
+    # Start the device
+    controller.write_protocol_commands({"start_stop_standby": 1})
     controller.write_protocol_commands({"on_grid_power_setpoint": 50.0})
 
     for _ in range(100):
@@ -88,18 +92,21 @@ def test_controller_bess_applies_only_on_change():
 
     # init step
     controller.step(dt=0.1)
+
+    # Start the device
+    controller.write_protocol_commands({"start_stop_standby": 1})
     controller.write_protocol_commands({"on_grid_power_setpoint": 10})
     controller.step(dt=0.1)
 
-    assert bess.on_grid_power_kw == 10
+    assert bess.commanded_power_kw == 10
 
     controller.step(dt=0.1)
-    assert bess.on_grid_power_kw == 10
+    assert bess.commanded_power_kw == 10
 
     controller.write_protocol_commands({"on_grid_power_setpoint": 20})
     controller.step(dt=0.1)
 
-    assert bess.on_grid_power_kw == 20
+    assert bess.commanded_power_kw == 20
 
 
 # ============================================================

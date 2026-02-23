@@ -9,6 +9,7 @@ registers:
   # ==========================================================
 
   - name: inverter_status
+    internal_name: inverter_status
     address: 0
     func: 0x04
     direction: read
@@ -18,6 +19,7 @@ registers:
     unit: ""
 
   - name: total_input_power
+    internal_name: total_input_power
     address: 1
     func: 0x04
     direction: read
@@ -27,6 +29,7 @@ registers:
     unit: W
 
   - name: total_active_power
+    internal_name: total_active_power
     address: 35
     func: 0x04
     direction: read
@@ -36,6 +39,7 @@ registers:
     unit: W
 
   - name: grid_frequency
+    internal_name: grid_frequency
     address: 37
     func: 0x04
     direction: read
@@ -45,6 +49,7 @@ registers:
     unit: Hz
 
   - name: today_output_energy
+    internal_name: today_output_energy
     address: 53
     func: 0x04
     direction: read
@@ -54,6 +59,7 @@ registers:
     unit: kWh
 
   - name: lifetime_output_energy
+    internal_name: lifetime_output_energy
     address: 55
     func: 0x04
     direction: read
@@ -63,6 +69,7 @@ registers:
     unit: kWh
 
   - name: temp_inverter
+    internal_name: temp_inverter
     address: 93
     func: 0x04
     direction: read
@@ -72,6 +79,7 @@ registers:
     unit: degC
 
   - name: power_factor
+    internal_name: power_factor
     address: 100
     func: 0x04
     direction: read
@@ -81,6 +89,7 @@ registers:
     unit: ""
 
   - name: fault_code
+    internal_name: fault_code
     address: 105
     func: 0x04
     direction: read
@@ -95,6 +104,7 @@ registers:
   # ==========================================================
 
   - name: remote_on_off
+    internal_name: remote_on_off
     address: 0
     func: 0x06
     direction: write
@@ -105,6 +115,7 @@ registers:
       1: On
 
   - name: active_power_rate
+    internal_name: active_power_rate
     address: 3
     func: 0x06
     direction: write
@@ -114,6 +125,7 @@ registers:
     unit: "%"
 
   - name: reactive_power_rate
+    internal_name: reactive_power_rate
     address: 4
     func: 0x06
     direction: write
@@ -123,6 +135,7 @@ registers:
     unit: "%"
 
   - name: power_factor_setpoint
+    internal_name: power_factor_setpoint
     address: 5
     func: 0x06
     direction: write

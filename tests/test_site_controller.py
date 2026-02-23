@@ -175,6 +175,7 @@ async def test_full_site_modbus_telemetry():
         high = (value >> 16) & 0xFFFF
         low = value & 0xFFFF
 
+        await bess_client.write_register(10055, 1)
         await bess_client.write_registers(10126, [high, low])
 
         await run_steps(site, 2000)

@@ -10,6 +10,7 @@ from dertwin.core.registers import RegisterDefinition, RegisterDirection
 TEST_REGISTERS = [
     RegisterDefinition(
         name="start_stop_standby",
+        internal_name="start_stop_standby",
         address=10055,
         func=0x06,
         direction=RegisterDirection.WRITE,
@@ -19,6 +20,7 @@ TEST_REGISTERS = [
     ),
     RegisterDefinition(
         name="on_grid_power",
+        internal_name="on_grid_power",
         address=10126,
         func=0x10,
         direction=RegisterDirection.WRITE,

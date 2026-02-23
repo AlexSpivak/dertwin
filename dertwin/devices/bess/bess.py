@@ -1,6 +1,10 @@
+from dertwin.devices.bess.battery import BatteryModel
+from dertwin.devices.bess.inverter import InverterModel
+
+
 class BESSModel:
 
-    def __init__(self, battery, inverter):
+    def __init__(self, battery: BatteryModel, inverter: InverterModel):
         self.battery = battery
         self.inverter = inverter
 
@@ -9,12 +13,15 @@ class BESSModel:
 
     def step(self, dt: float):
 
-        inv_power = self.inverter.step(dt)
-        actual_power = self.battery.step(inv_power, dt)
+        raw_target = self.inverter.target_power
+        allowed_target = self.battery.limit_power(raw_target)
+        self.inverter._target_power = allowed_target
+        actual_power = self.inverter.step(dt)
+        self.battery.step(actual_power, dt)
 
         telemetry = {
-            "service_voltage": self.battery.terminal_voltage(actual_power),
-            "service_current": self.battery.current(actual_power),
+            "service_voltage": self.battery.open_circuit_voltage(),
+            "service_current": actual_power,
             "system_soc": self.battery.soc,
             "battery_temperature": self.battery.temperature_c,
             "total_charge_energy": self.battery.charge_energy_total_kwh,
@@ -28,7 +35,7 @@ class BESSModel:
             "system_soh": self.battery.soh,
             "available_charging_power": self.inverter.max_charge_kw,
             "available_discharging_power": self.inverter.max_discharge_kw,
-            "on_grid_power": self.inverter.current_power,
+            "on_grid_power": actual_power,
             "grid_frequency": self.inverter.grid_frequency_hz,
         }
 

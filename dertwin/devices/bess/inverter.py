@@ -21,17 +21,26 @@ class InverterModel:
     def current_power(self) -> float:
         return self._current_power
 
+    # -------------------------------------------------
+    # Target Power (ADD SETTER HERE)
+    # -------------------------------------------------
+
+    @property
+    def target_power(self) -> float:
+        return self._target_power
+
+    @target_power.setter
+    def target_power(self, power_kw: float):
+        power_kw = float(power_kw)
+        power_kw = max(-self.max_charge_kw, min(self.max_discharge_kw, power_kw))
+        self._target_power = power_kw
+
+    # Keep old API for compatibility
     def set_target_power(self, power_kw: float):
-        self._target_power = float(power_kw)
+        self.target_power = power_kw
 
     def step(self, dt: float) -> float:
-
-        target = max(
-            -self.max_charge_kw,
-            min(self.max_discharge_kw, self._target_power),
-        )
-
-        delta = target - self._current_power
+        delta = self._target_power - self._current_power
         max_delta = self.ramp_rate * dt
 
         if abs(delta) > max_delta:
