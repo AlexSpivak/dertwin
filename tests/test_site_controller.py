@@ -6,7 +6,7 @@ from pymodbus.client import AsyncModbusTcpClient
 
 from dertwin.controllers.site_controller import SiteController
 from dertwin.core.registers import RegisterMap
-
+from dertwin.devices.pv.simulator import PVSimulator
 
 TEST_CONFIG = {
     "site_name": "integration-test-site",
@@ -201,6 +201,40 @@ async def test_full_site_modbus_telemetry():
         assert charged_soc > new_soc
 
         bess_client.close()
+
+        # ==========================================================
+        # DYNAMIC TEST — PV PRODUCTION & ENERGY ACCUMULATION
+        # ==========================================================
+
+        pv_controller = next(
+            c for c in site.controllers
+            if c.device.__class__.__name__.lower().startswith("pv")
+        )
+
+        pv_device: PVSimulator = pv_controller.device
+
+        # Inject irradiance directly (site simulation driver responsibility)
+        pv_device.set_irradiance(1000.0)
+
+        # Run simulation for some time
+        await run_steps(site, 200)
+
+        telemetry = pv_device.get_telemetry()
+
+        # PV should be producing
+        assert telemetry["total_active_power"] > 0.0
+        assert telemetry["total_active_power"] <= pv_device.rated_power_w
+
+        initial_energy = telemetry["today_output_energy"]
+
+        # Run longer to accumulate energy
+        await run_steps(site, 2000)
+
+        telemetry_after = pv_device.get_telemetry()
+        new_energy = telemetry_after["today_output_energy"]
+
+        # Energy must increase
+        assert new_energy > initial_energy
 
     finally:
         await site.stop()

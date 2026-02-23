@@ -8,7 +8,7 @@ from dertwin.core.engine import SimulationEngine
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap
 from dertwin.devices.bess.simulator import BESSSimulator
-from dertwin.devices.inverter import InverterSimulator
+from dertwin.devices.pv.simulator import PVSimulator
 from dertwin.devices.energy_meter import EnergyMeterSimulator
 from dertwin.devices.grid_frequency import GridFrequencyModel
 from dertwin.protocol.modbus import ModbusSimulator
@@ -164,7 +164,7 @@ class SiteController:
             return BESSSimulator()
 
         if dtype == "inverter":
-            return InverterSimulator()
+            return PVSimulator()
 
         if dtype == "energy_meter":
             return EnergyMeterSimulator(

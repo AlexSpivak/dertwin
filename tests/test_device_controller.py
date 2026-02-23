@@ -3,7 +3,7 @@ import pytest
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap, RegisterDefinition, RegisterDirection
 from dertwin.devices.bess.simulator import BESSSimulator
-from dertwin.devices.inverter import InverterSimulator
+from dertwin.devices.pv.simulator import PVSimulator
 from dertwin.devices.energy_meter import EnergyMeterSimulator
 from dertwin.devices.grid_frequency import GridFrequencyModel
 from dertwin.protocol.modbus import ModbusSimulator
@@ -113,37 +113,40 @@ def test_controller_bess_applies_only_on_change():
 # INVERTER CONTROLLER TESTS
 # ============================================================
 
-# Inverter currently does not use Modbus commands,
-# but we verify controller still updates it correctly.
-
 def test_controller_updates_inverter_power():
-    inverter = InverterSimulator(rated_kw=10.0)
-    inverter.set_irradiance(1.0)
+    pv = PVSimulator(rated_kw=10.0)
+
+    # realistic irradiance
+    pv.set_irradiance(1000.0)
 
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
 
     controller = DeviceController(
-        device=inverter,
+        device=pv,
         protocols=[modbus],
         register_map=RegisterMap([]),
     )
 
     controller.step(dt=1.0)
 
-    telemetry = inverter.get_telemetry()
+    telemetry = pv.get_telemetry()
 
-    expected_power = 10000.0 * inverter.efficiency
-    assert abs(telemetry["total_active_power"] - expected_power) < 1e-6
+    # We verify:
+    #   - power is positive
+    #   - does not exceed rated AC power
+    assert telemetry["total_active_power"] > 0.0
+    assert telemetry["total_active_power"] <= pv.rated_power_w
 
 
 def test_controller_inverter_energy_accumulates():
-    inverter = InverterSimulator(rated_kw=10.0)
-    inverter.set_irradiance(1.0)
+    pv = PVSimulator(rated_kw=10.0)
+
+    pv.set_irradiance(1000.0)
 
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
 
     controller = DeviceController(
-        device=inverter,
+        device=pv,
         protocols=[modbus],
         register_map=RegisterMap([]),
     )
@@ -151,8 +154,12 @@ def test_controller_inverter_energy_accumulates():
     for _ in range(3600):
         controller.step(dt=1.0)
 
-    expected_kwh = 10.0 * inverter.efficiency
-    assert abs(inverter.today_energy_kwh - expected_kwh) < 0.01
+    # PV includes:
+    #   - panel temperature derating
+    #   - inverter efficiency
+    #   - possible clipping
+    assert pv.today_energy_kwh > 0.0
+    assert pv.today_energy_kwh <= 10.0
 
 
 # ============================================================
