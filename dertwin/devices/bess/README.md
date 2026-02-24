@@ -87,7 +87,7 @@ Wraps the controller into a runnable simulated device.
 Provides:
 - Execution loop
 - Time stepping
-- Integration with protocol servers (e.g., Modbus)
+- Exposing Modbus-accessible values
 - Startup initialization
 - Telemetry publishing
 

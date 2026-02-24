@@ -98,7 +98,7 @@ async def run_steps(site, steps: int):
 
 @pytest.mark.asyncio
 async def test_full_site_modbus_telemetry():
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     if "register_map_root" in TEST_CONFIG:
         register_map_root = Path(TEST_CONFIG["register_map_root"])
         if not register_map_root.is_absolute():
@@ -122,8 +122,8 @@ async def test_full_site_modbus_telemetry():
         # ==========================================================
         # VERIFY ALL READ REGISTERS FOR ALL ASSETS
         # ==========================================================
-
-        for controller, asset in zip(site.controllers, TEST_CONFIG["assets"]):
+        assets: list[dict] = TEST_CONFIG["assets"]
+        for controller, asset in zip(site.controllers, assets):
 
             proto = asset["protocols"][0]
             port = proto["port"]
@@ -235,6 +235,52 @@ async def test_full_site_modbus_telemetry():
 
         # Energy must increase
         assert new_energy > initial_energy
+
+        # ==========================================================
+        # DYNAMIC TEST — ENERGY METER RESPONSE
+        # ==========================================================
+
+        em_controller = next(
+            c for c in site.controllers
+            if c.device.__class__.__name__.lower().startswith("energy")
+        )
+
+        em_device = em_controller.device
+
+        baseline = em_device.get_telemetry()
+        baseline_import = baseline["total_import_energy"]
+        baseline_export = baseline["total_export_energy"]
+
+        # ----------------------------------------------------------
+        # Strong PV production → expect export
+        # ----------------------------------------------------------
+
+        pv_device.set_irradiance(1000.0)
+
+        await run_steps(site, 2000)
+
+        telemetry_export = em_device.get_telemetry()
+
+        assert telemetry_export["total_active_power"] <= 0.0
+        assert telemetry_export["total_export_energy"] > baseline_export
+
+        export_after = telemetry_export["total_export_energy"]
+
+        # ----------------------------------------------------------
+        # Force import by stopping PV
+        # ----------------------------------------------------------
+
+        pv_device.set_irradiance(0.0)
+
+        await run_steps(site, 2000)
+
+        telemetry_import = em_device.get_telemetry()
+
+        assert telemetry_import["total_active_power"] >= 0.0
+        assert telemetry_import["total_import_energy"] > baseline_import
+
+        # Ensure export did not decrease (monotonic accumulation)
+        assert telemetry_import["total_export_energy"] >= export_after
 
     finally:
         await site.stop()

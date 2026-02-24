@@ -8,9 +8,10 @@ from dertwin.core.engine import SimulationEngine
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap
 from dertwin.devices.bess.simulator import BESSSimulator
+from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.pv.simulator import PVSimulator
-from dertwin.devices.energy_meter import EnergyMeterSimulator
-from dertwin.devices.grid_frequency import GridFrequencyModel
+from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
+from dertwin.devices.external.grid_frequency import GridFrequencyModel
 from dertwin.protocol.modbus import ModbusSimulator
 
 logger = logging.getLogger(__name__)
@@ -50,24 +51,39 @@ class SiteController:
         devices: List = []
 
         # Create devices
-        for asset in self.config["assets"]:
+        for asset in [a for a in self.config["assets"] if a["type"] != "energy_meter"]:
+
             device = self._create_device(asset)
             devices.append(device)
             devices_by_type.setdefault(asset["type"], []).append(device)
 
-        # Cross-wire dependencies
-        bess_devices = devices_by_type.get("bess", [])
-        inverter_devices = devices_by_type.get("inverter", [])
-        meter_devices = devices_by_type.get("energy_meter", [])
+        # ------------------------------------------------------
+        # Create SitePowerModel (world power balance)
+        # ------------------------------------------------------
 
-        if meter_devices:
-            for meter in meter_devices:
-                meter.pv_supplier = lambda inv=inverter_devices: sum(
-                    i.active_power_w for i in inv
-                )
-                meter.bess_supplier = lambda b=bess_devices: sum(
-                    bs.commanded_power_kw * 1000.0 for bs in b
-                )
+        bess_devices: List[BESSSimulator] = devices_by_type.get("bess", [])
+        pv_devices: List[PVSimulator] = devices_by_type.get("inverter", [])
+
+        power_model = SitePowerModel(
+            base_load_supplier=lambda t: 5.0,  # configurable later
+            pv_supplier=lambda: sum(p.active_power_w for p in pv_devices),
+            bess_supplier=lambda: sum(b.commanded_power_kw for b in bess_devices),
+        )
+
+        # ------------------------------------------------------
+        # Create Energy Meters
+        # ------------------------------------------------------
+
+        grid_model = GridFrequencyModel()
+
+        for _ in [a for a in self.config["assets"] if a["type"] == "energy_meter"]:
+            meter = EnergyMeterSimulator(
+                power_model=power_model,
+                grid_model=grid_model,
+            )
+
+            devices.append(meter)
+            devices_by_type.setdefault("energy_meter", []).append(meter)
 
         # Create controllers + protocols
         for asset, device in zip(self.config["assets"], devices):
@@ -166,10 +182,4 @@ class SiteController:
         if dtype == "inverter":
             return PVSimulator()
 
-        if dtype == "energy_meter":
-            return EnergyMeterSimulator(
-                base_load_supplier=lambda t: 5.0,
-                grid_frequency_model=GridFrequencyModel(),
-            )
-
-        raise ValueError(f"Unknown asset type: {dtype}")
+        raise ValueError(f"Unknown or unsupported asset type: {dtype}")

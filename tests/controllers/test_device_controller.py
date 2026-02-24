@@ -3,9 +3,10 @@ import pytest
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap, RegisterDefinition, RegisterDirection
 from dertwin.devices.bess.simulator import BESSSimulator
+from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.pv.simulator import PVSimulator
-from dertwin.devices.energy_meter import EnergyMeterSimulator
-from dertwin.devices.grid_frequency import GridFrequencyModel
+from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
+from dertwin.devices.external.grid_frequency import GridFrequencyModel
 from dertwin.protocol.modbus import ModbusSimulator
 
 
@@ -167,11 +168,17 @@ def test_controller_inverter_energy_accumulates():
 # ============================================================
 
 def create_meter(load_kw, pv_w=0.0, bess_w=0.0):
-    return EnergyMeterSimulator(
+    power_model = SitePowerModel(
         base_load_supplier=lambda t: load_kw,
         pv_supplier=lambda: pv_w,
         bess_supplier=lambda: bess_w,
-        grid_frequency_model=GridFrequencyModel(seed=1),
+    )
+
+    grid_model = GridFrequencyModel(seed=1)
+
+    return EnergyMeterSimulator(
+        power_model=power_model,
+        grid_model=grid_model,
         seed=1,
     )
 

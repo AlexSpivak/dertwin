@@ -1,7 +1,7 @@
 import unittest
 import time
 
-from dertwin.devices.grid_frequency import GridFrequencyModel, FrequencyEvent
+from dertwin.devices.external.grid_frequency import GridFrequencyModel, FrequencyEvent
 
 
 class TestGridFrequencyModel(unittest.TestCase):
