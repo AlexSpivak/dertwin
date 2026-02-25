@@ -43,9 +43,17 @@ class SitePowerModel:
         # Positive = import, Negative = export
         self.grid_power_kw = base_load_kw - pv_kw - bess_kw
 
+        if abs(self.grid_power_kw) < 1e-9:
+            self.grid_power_kw = 0.0
+
         energy_delta = self.grid_power_kw * dt_h
 
         if self.grid_power_kw > 0:
             self.import_energy_kwh += energy_delta
-        else:
+        elif self.grid_power_kw < 0:
             self.export_energy_kwh += -energy_delta
+
+    # --------------------------------------------------
+
+    def get_sim_time(self) -> float:
+        return self._sim_time
