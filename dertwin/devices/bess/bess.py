@@ -31,8 +31,8 @@ class BESSModel:
         actual_power = self.battery.step(actual_power, dt)
 
         # Capability telemetry
-        available_charge = max(0.0, -min_kw)
-        available_discharge = max(0.0, max_kw)
+        available_charge = max(0.0, min(self.inverter.max_charge_kw, -min_kw))
+        available_discharge = max(0.0, min(self.inverter.max_discharge_kw, max_kw))
 
         telemetry = {
             "service_voltage": self.battery.open_circuit_voltage(),
