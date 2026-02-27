@@ -1,17 +1,22 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 
 from dertwin.core.clock import SimulationClock
 from dertwin.core.engine import SimulationEngine
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap
+
 from dertwin.devices.bess.simulator import BESSSimulator
-from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.pv.simulator import PVSimulator
 from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
+
+from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.external.grid_frequency import GridFrequencyModel
+from dertwin.devices.external.grid_voltage import GridVoltageModel
+from dertwin.devices.external.external_models import ExternalModels
+
 from dertwin.protocol.modbus import ModbusSimulator
 
 logger = logging.getLogger(__name__)
@@ -40,9 +45,21 @@ class SiteController:
         self._built = False
         self._running = False
 
-    # ------------------------------------------------------------------
-    # BUILD
-    # ------------------------------------------------------------------
+        # ======================================================
+        # External models (optional except power flow)
+        # ======================================================
+
+        self.power_model: Optional[SitePowerModel] = None
+        self.grid_frequency_model: Optional[GridFrequencyModel] = None
+        self.grid_voltage_model: Optional[GridVoltageModel] = None
+
+        # future optional models
+        self.ambient_temperature_model = None
+        self.irradiance_model = None
+
+    # ==========================================================
+    # BUILD SITE
+    # ==========================================================
 
     def build(self) -> None:
         logger.info("Building site: %s", self.config.get("site_name", "unnamed"))
@@ -64,22 +81,39 @@ class SiteController:
         bess_devices: List[BESSSimulator] = devices_by_type.get("bess", [])
         pv_devices: List[PVSimulator] = devices_by_type.get("inverter", [])
 
-        power_model = SitePowerModel(
-            base_load_supplier=lambda t: 5.0,  # configurable later
-            pv_supplier=lambda: sum(p.active_power_w for p in pv_devices),
-            bess_supplier=lambda: sum(b.commanded_power_kw for b in bess_devices),
+        # ------------------------------------------------------
+        # Create world models
+        # ------------------------------------------------------
+
+        self.grid_frequency_model = GridFrequencyModel()
+        self.grid_voltage_model = GridVoltageModel()
+
+        # base load configurable later
+        base_load_supplier: Callable[[float], float] = (
+            lambda t: 5.0
+        )
+
+        self.power_model = SitePowerModel(
+            base_load_supplier=base_load_supplier,
+            pv_supplier=lambda: sum(
+                p.get_telemetry().get("total_active_power", 0.0)
+                for p in pv_devices
+            ),
+            bess_supplier=lambda: sum(
+                b.get_telemetry().get("active_power", 0.0) * 1000.0
+                for b in bess_devices
+            ),
         )
 
         # ------------------------------------------------------
         # Create Energy Meters
         # ------------------------------------------------------
 
-        grid_model = GridFrequencyModel()
-
         for _ in [a for a in self.config["assets"] if a["type"] == "energy_meter"]:
             meter = EnergyMeterSimulator(
-                power_model=power_model,
-                grid_model=grid_model,
+                power_model=self.power_model,
+                grid_model=self.grid_frequency_model,
+                grid_voltage_model=self.grid_voltage_model,
             )
 
             devices.append(meter)
@@ -115,10 +149,20 @@ class SiteController:
 
                 self.controllers.append(controller)
 
-        # Engine
+        # ------------------------------------------------------
+        # Create ExternalModels container
+        # ------------------------------------------------------
+
+        external_models = ExternalModels(
+            power_model=self.power_model,
+            grid_frequency_model=self.grid_frequency_model,
+            grid_voltage_model=self.grid_voltage_model,
+        )
+
         self.engine = SimulationEngine(
             devices=self.controllers,
             clock=self.clock,
+            external_models=external_models,
         )
 
         self._built = True

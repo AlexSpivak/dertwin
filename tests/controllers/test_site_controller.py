@@ -200,6 +200,8 @@ async def test_full_site_modbus_telemetry():
 
         assert charged_soc > new_soc
 
+        # turn off bess
+        await bess_client.write_register(10055, 0)
         bess_client.close()
 
         # ==========================================================

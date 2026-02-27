@@ -109,7 +109,8 @@ def test_grid_voltage_fault_stops_production():
     inv = PVSimulator(rated_kw=10.0)
 
     inv.set_irradiance(1000.0)
-    inv.set_grid_conditions(voltage=100.0, frequency=50.0)
+    inv.inverter.grid_voltage = 100.0
+    inv.inverter.grid_frequency = 50.0
 
     inv.update(dt=1.0)
 

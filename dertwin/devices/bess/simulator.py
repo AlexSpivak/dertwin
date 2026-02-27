@@ -1,10 +1,13 @@
-from typing import Dict
+from typing import Dict, Optional
 
 from dertwin.core.device import SimulatedDevice
 from dertwin.devices.bess.battery import BatteryModel
 from dertwin.devices.bess.inverter import InverterModel
 from dertwin.devices.bess.bess import BESSModel
 from dertwin.devices.bess.controller import BESSController
+from dertwin.devices.external.ambient_temperature import AmbientTemperatureModel
+from dertwin.devices.external.grid_frequency import GridFrequencyModel
+from dertwin.devices.external.grid_voltage import GridVoltageModel
 
 
 class BESSSimulator(SimulatedDevice):
@@ -16,9 +19,12 @@ class BESSSimulator(SimulatedDevice):
     """
 
     def __init__(
-        self,
-        ramp_rate_kw_per_s: float = 100.0,
-        ambient_temp_c: float = 20.0,
+            self,
+            ramp_rate_kw_per_s: float = 100.0,
+            ambient_temp_c: float = 20.0,
+            ambient_temp_model: Optional[AmbientTemperatureModel] = None,
+            grid_frequency_model: Optional[GridFrequencyModel] = None,
+            grid_voltage_model: Optional[GridVoltageModel] = None,
     ):
         super().__init__()
 
@@ -39,6 +45,10 @@ class BESSSimulator(SimulatedDevice):
         self.controller = BESSController(self.bess)
 
         self._last_telemetry: Dict[str, float] = {}
+
+        self.ambient_temp_model = ambient_temp_model
+        self.grid_frequency_model = grid_frequency_model
+        self.grid_voltage_model = grid_voltage_model
 
     # =========================================================
     # ---- Compatibility Properties (OLD API)
@@ -161,6 +171,21 @@ class BESSSimulator(SimulatedDevice):
     # =========================================================
 
     def update(self, dt: float) -> None:
+        # Ambient temperature
+        if self.ambient_temp_model:
+            ambient = self.ambient_temp_model.get_temperature()
+            self.battery.set_ambient_temperature(ambient)
+
+        # Grid frequency
+        if self.grid_frequency_model:
+            freq = self.grid_frequency_model.get_frequency()
+            self.inverter.set_grid_frequency(freq)
+
+        # Grid voltage
+        if self.grid_voltage_model:
+            voltage = self.grid_voltage_model.get_voltage_ll()
+            self.inverter.set_grid_voltage(voltage)
+
         self._last_telemetry = self.controller.step(dt)
 
     def get_telemetry(self) -> Dict[str, float]:

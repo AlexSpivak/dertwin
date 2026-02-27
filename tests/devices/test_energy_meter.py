@@ -1,5 +1,6 @@
 import pytest
 
+from dertwin.devices.external.grid_voltage import GridVoltageModel
 from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
 from dertwin.devices.external.grid_frequency import GridFrequencyModel
@@ -13,12 +14,16 @@ def create_meter(load_kw, pv_w=0.0, bess_w=0.0):
     )
 
     grid_model = GridFrequencyModel(seed=1)
+    voltage_model = GridVoltageModel(seed=1)
 
-    return EnergyMeterSimulator(
+    meter = EnergyMeterSimulator(
         power_model=power_model,
         grid_model=grid_model,
+        grid_voltage_model=voltage_model,
         seed=1,
     )
+
+    return meter, power_model
 
 
 # --------------------------------------------------
@@ -26,8 +31,9 @@ def create_meter(load_kw, pv_w=0.0, bess_w=0.0):
 # --------------------------------------------------
 
 def test_import_energy_accumulates():
-    meter = create_meter(load_kw=10.0)
+    meter, power_model = create_meter(load_kw=10.0)
 
+    power_model.update(3600)
     meter.update(3600)  # 1 hour
 
     telemetry = meter.get_telemetry()
@@ -43,8 +49,9 @@ def test_import_energy_accumulates():
 
 def test_export_energy_accumulates():
     # 5 kW load, 15 kW PV → -10 kW export
-    meter = create_meter(load_kw=5.0, pv_w=15000.0)
+    meter, power_model = create_meter(load_kw=5.0, pv_w=15000.0)
 
+    power_model.update(3600)
     meter.update(3600)
 
     telemetry = meter.get_telemetry()
@@ -59,8 +66,9 @@ def test_export_energy_accumulates():
 # --------------------------------------------------
 
 def test_zero_grid_flow():
-    meter = create_meter(load_kw=5.0, pv_w=5000.0)
+    meter, power_model = create_meter(load_kw=5.0, pv_w=5000.0)
 
+    power_model.update(3600)
     meter.update(3600)
 
     telemetry = meter.get_telemetry()
@@ -75,8 +83,9 @@ def test_zero_grid_flow():
 # --------------------------------------------------
 
 def test_energy_accumulates_over_multiple_updates():
-    meter = create_meter(load_kw=2.0)
+    meter, power_model = create_meter(load_kw=2.0)
 
+    power_model.update(3600)
     meter.update(1800)  # 0.5 h
     meter.update(1800)  # 0.5 h
 
@@ -90,8 +99,9 @@ def test_energy_accumulates_over_multiple_updates():
 # --------------------------------------------------
 
 def test_sign_convention_export_negative():
-    meter = create_meter(load_kw=3.0, pv_w=8000.0)
+    meter, power_model = create_meter(load_kw=3.0, pv_w=8000.0)
 
+    power_model.update(1)
     meter.update(1)
 
     telemetry = meter.get_telemetry()

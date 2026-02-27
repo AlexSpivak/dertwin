@@ -3,6 +3,7 @@ import pytest
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap, RegisterDefinition, RegisterDirection
 from dertwin.devices.bess.simulator import BESSSimulator
+from dertwin.devices.external.grid_voltage import GridVoltageModel
 from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.pv.simulator import PVSimulator
 from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
@@ -175,16 +176,20 @@ def create_meter(load_kw, pv_w=0.0, bess_w=0.0):
     )
 
     grid_model = GridFrequencyModel(seed=1)
+    voltage_model = GridVoltageModel(seed=1)
 
-    return EnergyMeterSimulator(
+    meter = EnergyMeterSimulator(
         power_model=power_model,
         grid_model=grid_model,
+        grid_voltage_model=voltage_model,
         seed=1,
     )
 
+    return meter, power_model
+
 
 def test_controller_updates_energy_meter_import():
-    meter = create_meter(load_kw=10.0)
+    meter, power_model = create_meter(load_kw=10.0)
 
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
 
@@ -193,6 +198,8 @@ def test_controller_updates_energy_meter_import():
         protocols=[modbus],
         register_map=RegisterMap([]),
     )
+
+    power_model.update(dt=3600)
 
     controller.step(dt=3600)  # 1 hour
 
@@ -204,7 +211,7 @@ def test_controller_updates_energy_meter_import():
 
 
 def test_controller_updates_energy_meter_export():
-    meter = create_meter(load_kw=5.0, pv_w=15000.0)
+    meter, power_model = create_meter(load_kw=5.0, pv_w=15000.0)
 
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
 
@@ -213,6 +220,8 @@ def test_controller_updates_energy_meter_export():
         protocols=[modbus],
         register_map=RegisterMap([]),
     )
+
+    power_model.update(dt=3600)
 
     controller.step(dt=3600)
 
@@ -224,7 +233,7 @@ def test_controller_updates_energy_meter_export():
 
 
 def test_controller_meter_is_passive_to_commands():
-    meter = create_meter(load_kw=5.0)
+    meter, power_model = create_meter(load_kw=5.0)
 
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
 
@@ -233,6 +242,7 @@ def test_controller_meter_is_passive_to_commands():
         protocols=[modbus],
         register_map=RegisterMap([]),
     )
+    power_model.update(dt=3600)
 
     controller.write_protocol_commands({"some_random_command": 123})
     controller.step(dt=1.0)

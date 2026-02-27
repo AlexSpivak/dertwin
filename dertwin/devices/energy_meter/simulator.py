@@ -2,6 +2,7 @@ from typing import Dict
 
 from dertwin.core.device import SimulatedDevice
 from dertwin.devices.energy_meter.model import EnergyMeterModel
+from dertwin.devices.external.grid_voltage import GridVoltageModel
 from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.external.grid_frequency import GridFrequencyModel
 
@@ -13,16 +14,19 @@ class EnergyMeterSimulator(SimulatedDevice):
     Observes:
         - SitePowerModel (power balance)
         - GridFrequencyModel (frequency)
+        - GridVoltageModel (voltage)
     """
 
     def __init__(
         self,
         power_model: SitePowerModel,
         grid_model: GridFrequencyModel,
+        grid_voltage_model: GridVoltageModel,
         seed: int | None = None,
     ):
         self.power_model = power_model
         self.grid_model = grid_model
+        self.grid_voltage_model = grid_voltage_model
 
         self.model = EnergyMeterModel(seed=seed)
 
@@ -32,15 +36,17 @@ class EnergyMeterSimulator(SimulatedDevice):
     # Simulation Step
     # --------------------------------------------------
     def update(self, dt: float) -> None:
-        self.power_model.update(dt)
 
         frequency = self.grid_model.get_frequency()
+
+        voltage_ll = self.grid_voltage_model.get_voltage_ll()
 
         self._last_telemetry = self.model.measure(
             grid_power_kw=self.power_model.grid_power_kw,
             import_energy_kwh=self.power_model.import_energy_kwh,
             export_energy_kwh=self.power_model.export_energy_kwh,
-            grid_frequency_hz=frequency,
+            grid_frequency=frequency,
+            voltage_ll=voltage_ll,
         )
 
     # --------------------------------------------------

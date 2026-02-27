@@ -36,7 +36,10 @@ class BESSModel:
             "available_charging_power": self.inverter.max_charge_kw,
             "available_discharging_power": self.inverter.max_discharge_kw,
             "on_grid_power": actual_power,
-            "grid_frequency": self.inverter.grid_frequency_hz,
+            "grid_frequency": self.inverter.grid_frequency,
+            "grid_voltage_ab": self.inverter.grid_voltage_ll,
+            "grid_voltage_bc": self.inverter.grid_voltage_ll,
+            "grid_voltage_ca": self.inverter.grid_voltage_ll,
         }
 
         return telemetry

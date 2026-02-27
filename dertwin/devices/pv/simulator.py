@@ -1,6 +1,10 @@
-from typing import Dict
+from typing import Dict, Optional
 
 from dertwin.core.device import SimulatedDevice
+from dertwin.devices.external.ambient_temperature import AmbientTemperatureModel
+from dertwin.devices.external.grid_frequency import GridFrequencyModel
+from dertwin.devices.external.grid_voltage import GridVoltageModel
+from dertwin.devices.external.irradiance import IrradianceModel
 from dertwin.devices.pv.panel import PVArrayModel
 from dertwin.devices.pv.inverter import PVInverterModel
 from dertwin.devices.pv.pv import PVModel
@@ -22,6 +26,10 @@ class PVSimulator(SimulatedDevice):
         ambient_temp_c: float = 20.0,
         module_efficiency: float = 0.20,
         area_m2: float | None = None,
+        ambient_temp_model: Optional[AmbientTemperatureModel] = None,
+        grid_frequency_model: Optional[GridFrequencyModel] = None,
+        grid_voltage_model: Optional[GridVoltageModel] = None,
+        irradiance_model: Optional[IrradianceModel] = None,
     ):
         super().__init__()
 
@@ -47,6 +55,12 @@ class PVSimulator(SimulatedDevice):
         self.controller = PVController(self.pv)
 
         self._last_telemetry: Dict[str, float] = {}
+
+
+        self.ambient_temp_model = ambient_temp_model
+        self.grid_frequency_model = grid_frequency_model
+        self.grid_voltage_model = grid_voltage_model
+        self.irradiance_model = irradiance_model
 
     # =========================================================
     # ---- Compatibility Properties (OLD STYLE API)
@@ -91,15 +105,31 @@ class PVSimulator(SimulatedDevice):
     def set_irradiance(self, irradiance_w_per_m2: float):
         self.panel.set_irradiance(irradiance_w_per_m2)
 
-    def set_grid_conditions(self, voltage: float, frequency: float):
-        self.inverter.grid_voltage = float(voltage)
-        self.inverter.grid_frequency = float(frequency)
-
     # =========================================================
     # ---- SimulatedDevice Interface
     # =========================================================
 
     def update(self, dt: float) -> None:
+        # Ambient temperature
+        if self.ambient_temp_model:
+            ambient = self.ambient_temp_model.get_temperature()
+            self.panel.set_ambient_temperature(ambient)
+
+        # Grid frequency
+        if self.grid_frequency_model:
+            freq = self.grid_frequency_model.get_frequency()
+            self.inverter.grid_frequency = float(freq)
+
+        # Grid voltage
+        if self.grid_voltage_model:
+            voltage = self.grid_voltage_model.get_voltage_ll()
+            self.inverter.grid_voltage = float(voltage)
+
+        # Irradiance
+        if self.irradiance_model:
+            irradiance = self.irradiance_model.get_irradiance()
+            self.panel.set_irradiance(irradiance)
+
         self._last_telemetry = self.controller.step(dt)
 
     def get_telemetry(self) -> Dict[str, float]:

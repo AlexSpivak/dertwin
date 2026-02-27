@@ -5,16 +5,18 @@ from typing import Dict
 
 class EnergyMeterModel:
     """
-    Measurement model of a PCC energy meter.
+    Deterministic PCC energy meter measurement model.
+
+    This model is a pure observer. It NEVER updates physics.
 
     Observes:
-        - SitePowerModel
-        - GridModel (optional in future)
+        - SitePowerModel (grid power, energy counters)
+        - GridFrequencyModel (frequency)
 
     Applies:
-        - PF drift
-        - Reactive calculation
-        - Measurement noise (optional)
+        - power factor drift
+        - reactive power calculation
+        - optional deterministic noise
     """
 
     def __init__(self, seed: int | None = None):
@@ -29,21 +31,31 @@ class EnergyMeterModel:
         grid_power_kw: float,
         import_energy_kwh: float,
         export_energy_kwh: float,
-        grid_frequency_hz: float,
+        grid_frequency: float,
+        voltage_ll: float,
     ) -> Dict[str, float]:
 
-        # Smooth PF drift
+        # deterministic PF drift
         pf_target = self._rng.uniform(0.95, 1.0)
         self._pf += (pf_target - self._pf) * 0.05
 
+        # reactive power from PF
         reactive_power = grid_power_kw * math.tan(math.acos(self._pf))
+
+        # balanced 3-phase assumption
         phase_power = grid_power_kw / 3.0
+
+        voltage_ln = voltage_ll / math.sqrt(3.0)
 
         return {
             "total_active_power": grid_power_kw,
             "total_reactive_power": reactive_power,
             "total_power_factor": self._pf,
-            "grid_frequency": grid_frequency_hz,
+            "grid_frequency": grid_frequency,
+
+            "phase_voltage_a": voltage_ln,
+            "phase_voltage_b": voltage_ln,
+            "phase_voltage_c": voltage_ln,
 
             "phase_active_power_a": phase_power,
             "phase_active_power_b": phase_power,

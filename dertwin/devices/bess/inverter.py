@@ -15,7 +15,8 @@ class InverterModel:
         self._target_power = 0.0
         self._current_power = 0.0
 
-        self.grid_frequency_hz = 50.0
+        self.grid_frequency = 50.0
+        self.grid_voltage_ll = 400.0
 
     @property
     def current_power(self) -> float:
@@ -55,3 +56,9 @@ class InverterModel:
 
     def apparent_power(self) -> float:
         return math.hypot(self._current_power, self.reactive_power())
+
+    def set_grid_frequency(self, hz: float):
+        self.grid_frequency = float(hz)
+
+    def set_grid_voltage(self, voltage: float):
+        self.grid_voltage_ll = float(voltage)

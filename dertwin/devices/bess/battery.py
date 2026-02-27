@@ -133,3 +133,6 @@ class BatteryModel:
         base_voltage = 700.0
         soc_factor = 1.0 + 0.1 * math.sin((self.soc / 100.0) * math.pi)
         return base_voltage * soc_factor
+
+    def set_ambient_temperature(self, temp_c: float):
+        self.ambient_temp_c = float(temp_c)
