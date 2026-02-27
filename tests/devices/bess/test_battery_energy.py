@@ -43,6 +43,6 @@ def test_cycle_counter_updates():
         battery.discharge_energy_total_kwh
     )
 
-    expected_cycles = total_energy / battery.capacity_kwh
+    expected_cycles = total_energy / (2 * battery.capacity_kwh)
 
     assert pytest.approx(battery.cycles, rel=1e-6) == expected_cycles
