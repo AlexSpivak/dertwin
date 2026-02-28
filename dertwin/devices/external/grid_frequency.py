@@ -118,3 +118,14 @@ class GridFrequencyModel:
 
     def get_frequency(self) -> float:
         return self._frequency
+
+class ConstantGridFrequencyModel(GridFrequencyModel):
+    def __init__(self, frequency_hz: float = 50.0):
+        super().__init__()
+        self._frequency = frequency_hz
+
+    def update(self, sim_time: float, dt: float):
+        pass
+
+    def get_frequency(self) -> float:
+        return self._frequency

@@ -12,9 +12,6 @@ from dertwin.devices.bess.simulator import BESSSimulator
 from dertwin.devices.pv.simulator import PVSimulator
 from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
 
-from dertwin.devices.external.power_flow import SitePowerModel
-from dertwin.devices.external.grid_frequency import GridFrequencyModel
-from dertwin.devices.external.grid_voltage import GridVoltageModel
 from dertwin.devices.external.external_models import ExternalModels
 
 from dertwin.protocol.modbus import ModbusSimulator
@@ -45,17 +42,7 @@ class SiteController:
         self._built = False
         self._running = False
 
-        # ======================================================
-        # External models (optional except power flow)
-        # ======================================================
-
-        self.power_model: Optional[SitePowerModel] = None
-        self.grid_frequency_model: Optional[GridFrequencyModel] = None
-        self.grid_voltage_model: Optional[GridVoltageModel] = None
-
-        # future optional models
-        self.ambient_temperature_model = None
-        self.irradiance_model = None
+        self.external_models: Optional[ExternalModels] = None
 
     # ==========================================================
     # BUILD SITE
@@ -64,46 +51,23 @@ class SiteController:
     def build(self) -> None:
         logger.info("Building site: %s", self.config.get("site_name", "unnamed"))
 
+
+        if self.config.get("external_models"):
+            self.external_models = ExternalModels.from_config(self.config.get("external_models"))
+        else:
+            self.external_models = ExternalModels.build_default()
+
         devices_by_type: Dict[str, List] = {}
         devices: List = []
 
         # Create devices
         for asset in [a for a in self.config["assets"] if a["type"] != "energy_meter"]:
-
             device = self._create_device(asset)
             devices.append(device)
             devices_by_type.setdefault(asset["type"], []).append(device)
 
-        # ------------------------------------------------------
-        # Create SitePowerModel (world power balance)
-        # ------------------------------------------------------
+        self.external_models.power_model = ExternalModels.build_power_model(devices_by_type, self.config.get("power_model"))
 
-        bess_devices: List[BESSSimulator] = devices_by_type.get("bess", [])
-        pv_devices: List[PVSimulator] = devices_by_type.get("inverter", [])
-
-        # ------------------------------------------------------
-        # Create world models
-        # ------------------------------------------------------
-
-        self.grid_frequency_model = GridFrequencyModel()
-        self.grid_voltage_model = GridVoltageModel()
-
-        # base load configurable later
-        base_load_supplier: Callable[[float], float] = (
-            lambda t: 5.0
-        )
-
-        self.power_model = SitePowerModel(
-            base_load_supplier=base_load_supplier,
-            pv_supplier=lambda: sum(
-                p.get_telemetry().get("total_active_power", 0.0)
-                for p in pv_devices
-            ),
-            bess_supplier=lambda: sum(
-                b.get_telemetry().get("active_power", 0.0) * 1000.0
-                for b in bess_devices
-            ),
-        )
 
         # ------------------------------------------------------
         # Create Energy Meters
@@ -111,9 +75,9 @@ class SiteController:
 
         for _ in [a for a in self.config["assets"] if a["type"] == "energy_meter"]:
             meter = EnergyMeterSimulator(
-                power_model=self.power_model,
-                grid_model=self.grid_frequency_model,
-                grid_voltage_model=self.grid_voltage_model,
+                power_model=self.external_models.power_model,
+                grid_model=self.external_models.grid_frequency_model,
+                grid_voltage_model=self.external_models.grid_voltage_model,
             )
 
             devices.append(meter)
@@ -149,20 +113,10 @@ class SiteController:
 
                 self.controllers.append(controller)
 
-        # ------------------------------------------------------
-        # Create ExternalModels container
-        # ------------------------------------------------------
-
-        external_models = ExternalModels(
-            power_model=self.power_model,
-            grid_frequency_model=self.grid_frequency_model,
-            grid_voltage_model=self.grid_voltage_model,
-        )
-
         self.engine = SimulationEngine(
             devices=self.controllers,
             clock=self.clock,
-            external_models=external_models,
+            external_models=self.external_models,
         )
 
         self._built = True
@@ -221,9 +175,18 @@ class SiteController:
         dtype = asset_cfg["type"]
 
         if dtype == "bess":
-            return BESSSimulator()
+            return BESSSimulator(
+                ambient_temp_model=self.external_models.ambient_temperature_model,
+                grid_voltage_model=self.external_models.grid_voltage_model,
+                grid_frequency_model=self.external_models.grid_frequency_model,
+            )
 
         if dtype == "inverter":
-            return PVSimulator()
+            return PVSimulator(
+                ambient_temp_model=self.external_models.ambient_temperature_model,
+                grid_voltage_model=self.external_models.grid_voltage_model,
+                grid_frequency_model=self.external_models.grid_frequency_model,
+                irradiance_model=self.external_models.irradiance_model,
+            )
 
         raise ValueError(f"Unknown or unsupported asset type: {dtype}")

@@ -122,7 +122,7 @@ class PVSimulator(SimulatedDevice):
 
         # Grid voltage
         if self.grid_voltage_model:
-            voltage = self.grid_voltage_model.get_voltage_ll()
+            voltage = self.grid_voltage_model.get_voltage_ln()
             self.inverter.grid_voltage = float(voltage)
 
         # Irradiance

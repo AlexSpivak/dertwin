@@ -1,4 +1,5 @@
 import asyncio
+import math
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,8 @@ from pymodbus.client import AsyncModbusTcpClient
 
 from dertwin.controllers.site_controller import SiteController
 from dertwin.core.registers import RegisterMap
+from dertwin.devices.external.grid_frequency import FrequencyEvent
+from dertwin.devices.external.grid_voltage import VoltageEvent
 from dertwin.devices.pv.simulator import PVSimulator
 
 TEST_CONFIG = {
@@ -89,10 +92,15 @@ async def run_steps(site, steps: int):
     for _ in range(steps):
         await site.engine.step_once()
 
+def get_controller(site, prefix: str):
+    return next(
+        c for c in site.controllers
+        if c.device.__class__.__name__.lower().startswith(prefix)
+    )
 
 
 # ==========================================================
-# FULL INTEGRATION TEST
+# FULL INTEGRATION TEST WITH DISABLED EXTERNAL MODELS
 # ==========================================================
 
 
@@ -284,9 +292,299 @@ async def test_full_site_modbus_telemetry():
         # Ensure export did not decrease (monotonic accumulation)
         assert telemetry_import["total_export_energy"] >= export_after
 
+        # ==========================================================
+        # DETERMINISTIC GRID MODEL TEST
+        # ==========================================================
+
+        em_controller = next(
+            c for c in site.controllers
+            if c.device.__class__.__name__.lower().startswith("energy")
+        )
+
+        em_device = em_controller.device
+
+        telemetry = em_device.get_telemetry()
+
+        # Frequency must exist and be deterministic
+        assert "grid_frequency" in telemetry
+        assert telemetry["grid_frequency"] == pytest.approx(50.0, abs=1e-6)
+
+        # Voltage must exist and be deterministic
+        assert "phase_voltage_a" in telemetry
+        assert "phase_voltage_b" in telemetry
+        assert "phase_voltage_c" in telemetry
+
+        expected_ln = 400.0 / math.sqrt(3.0)
+
+        assert telemetry["phase_voltage_a"] == pytest.approx(expected_ln, abs=1e-6)
+        assert telemetry["phase_voltage_b"] == pytest.approx(expected_ln, abs=1e-6)
+        assert telemetry["phase_voltage_c"] == pytest.approx(expected_ln, abs=1e-6)
+
+        # Verify stability across steps
+        await run_steps(site, 100)
+
+        telemetry2 = em_device.get_telemetry()
+
+        assert telemetry2["grid_frequency"] == pytest.approx(50.0, abs=1e-6)
+        assert telemetry2["phase_voltage_a"] == pytest.approx(expected_ln, abs=1e-6)
+
     finally:
         await site.stop()
         site_task.cancel()
+        try:
+            await site_task
+        except asyncio.CancelledError:
+            pass
+
+# ==========================================================
+# CONFIG WITH EXTERNAL MODELS ENABLED
+# ==========================================================
+
+TEST_CONFIG_EXTERNAL = {
+    "site_name": "integration-test-site-external-models",
+    "step": 0.1,
+    "real_time": False,
+    "register_map_root": "configs/register_maps",
+
+    # NEW PART — external models config
+    "external_models": {
+
+        "power": {
+            "base_load_w": 10000.0,
+        },
+
+        "irradiance": {
+            "peak": 1000.0,
+            "sunrise": 6.0,
+            "sunset": 18.0,
+        },
+
+        "ambient_temperature": {
+            "mean": 25.0,
+            "amplitude": 10.0,
+            "peak_hour": 15.0,
+        },
+
+        "grid_frequency": {
+            "nominal_hz": 50.0,
+            "noise_std": 0.002,
+            "drift_std": 0.0002,
+            "seed": 42,
+        },
+
+        "grid_voltage": {
+            "nominal_v_ll": 400.0,
+            "noise_std": 0.5,
+            "drift_std": 0.05,
+            "seed": 42,
+        },
+    },
+
+    "assets": [
+        {
+            "type": "bess",
+            "protocols": [
+                {
+                    "kind": "modbus_tcp",
+                    "ip": "127.0.0.1",
+                    "port": 55101,
+                    "unit_id": 1,
+                    "register_map": "bess_modbus.yaml",
+                }
+            ],
+        },
+        {
+            "type": "energy_meter",
+            "protocols": [
+                {
+                    "kind": "modbus_tcp",
+                    "ip": "127.0.0.1",
+                    "port": 55102,
+                    "unit_id": 1,
+                    "register_map": "energy_meter_modbus.yaml",
+                }
+            ],
+        },
+        {
+            "type": "inverter",
+            "protocols": [
+                {
+                    "kind": "modbus_tcp",
+                    "ip": "127.0.0.1",
+                    "port": 55103,
+                    "unit_id": 1,
+                    "register_map": "pv_inverter_modbus.yaml",
+                }
+            ],
+        },
+    ],
+}
+
+# ==========================================================
+# MAIN TEST
+# ==========================================================
+
+
+@pytest.mark.asyncio
+async def test_external_models_full_integration():
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+
+    register_map_root = Path(TEST_CONFIG_EXTERNAL["register_map_root"])
+    if not register_map_root.is_absolute():
+        register_map_root = project_root / register_map_root
+
+    TEST_CONFIG_EXTERNAL["register_map_root"] = str(register_map_root.resolve())
+
+    site = SiteController(TEST_CONFIG_EXTERNAL)
+    site.build()
+    site.engine.clock.time = 12 * 3600  # set clock to noon
+
+    site_task = asyncio.create_task(site.start())
+
+    try:
+
+        await wait_until_server_ready(55101)
+        await wait_until_server_ready(55102)
+        await wait_until_server_ready(55103)
+
+        await run_steps(site, 50)
+
+        pv: PVSimulator = get_controller(site, "pv").device
+        meter = get_controller(site, "energy").device
+
+        external = site.external_models
+
+        # ==========================================================
+        # TEST 1 — IRRADIANCE MODEL DRIVES PV OUTPUT
+        # ==========================================================
+
+        power_samples = []
+
+        for _ in range(100):
+            await run_steps(site, 1)
+            power_samples.append(pv.get_telemetry()["total_active_power"])
+
+        assert max(power_samples) > 0.0
+        assert max(power_samples) <= pv.rated_power_w
+
+        site.engine.clock.reset()
+        for _ in range(100):
+            await run_steps(site, 1)
+            power_samples.append(pv.get_telemetry()["total_active_power"])
+
+        # Should have both day and night values
+        assert min(power_samples) == pytest.approx(0.0, abs=1e-3)
+
+        # ==========================================================
+        # TEST 2 — AMBIENT TEMPERATURE MODEL PROPAGATES
+        # ==========================================================
+        site.engine.clock.time = 15 * 3600  # set clock to expected day max temperature
+        temps = []
+
+        for _ in range(100):
+            await run_steps(site, 1)
+            temps.append(external.ambient_temperature_model.get_temperature())
+
+        assert max(temps) > TEST_CONFIG_EXTERNAL["external_models"]["ambient_temperature"]["mean"]
+
+        site.engine.clock.reset() # reset back to midnight
+        for _ in range(100):
+            await run_steps(site, 1)
+            temps.append(external.ambient_temperature_model.get_temperature())
+        assert min(temps) < TEST_CONFIG_EXTERNAL["external_models"]["ambient_temperature"]["mean"]
+
+        # temperature must vary smoothly
+        assert (max(temps) - min(temps)) > 5.0
+
+        # ==========================================================
+        # TEST 3 — GRID FREQUENCY EVENT RESPONSE
+        # ==========================================================
+
+        freq_model = external.grid_frequency_model
+
+        baseline = freq_model.get_frequency()
+
+        freq_model.add_event(
+            FrequencyEvent(
+                start_time=site.engine.sim_time + 5.0,
+                duration=1000.0,
+                delta_hz=-0.5,
+                shape="step",
+            )
+        )
+
+        await run_steps(site, 200)
+
+        freq_after = freq_model.get_frequency()
+
+        assert freq_after < baseline - 0.1
+
+        # ==========================================================
+        # TEST 4 — GRID VOLTAGE EVENT RESPONSE
+        # ==========================================================
+
+        voltage_model = external.grid_voltage_model
+
+        baseline_voltage = voltage_model.get_voltage_ll()
+
+        voltage_model.add_event(
+            VoltageEvent(
+                start_time=site.engine.sim_time + 5.0,
+                duration=1000.0,
+                delta_v=-0.1,
+                shape="step",
+            )
+        )
+
+        await run_steps(site, 200)
+
+        sag_voltage = voltage_model.get_voltage_ll()
+
+        assert sag_voltage < baseline_voltage * 0.95
+
+        # ==========================================================
+        # TEST 5 — ENERGY METER EXPORT DURING PV PEAK
+        # ==========================================================
+        site.engine.clock.time = 12 * 3600  # set clock to noon
+        export_before = meter.get_telemetry()["total_export_energy"]
+
+        await run_steps(site, 5000)
+
+        export_after = meter.get_telemetry()["total_export_energy"]
+
+        assert export_after > export_before
+
+        site.clock.reset() # reset clock to midnight
+        # ==========================================================
+        # TEST 6 — IMPORT DURING LOW IRRADIANCE
+        # ==========================================================
+
+        import_before = meter.get_telemetry()["total_import_energy"]
+
+        # fast-forward to night
+        await run_steps(site, 5000)
+
+        import_after = meter.get_telemetry()["total_import_energy"]
+
+        assert import_after > import_before
+
+        # ==========================================================
+        # TEST 7 — VOLTAGE AND FREQUENCY REMAIN WITHIN SAFE LIMITS
+        # ==========================================================
+
+        freq = freq_model.get_frequency()
+        voltage = voltage_model.get_voltage_ll()
+
+        assert 45.0 <= freq <= 55.0
+        assert 300.0 <= voltage <= 480.0
+
+    finally:
+
+        await site.stop()
+
+        site_task.cancel()
+
         try:
             await site_task
         except asyncio.CancelledError:

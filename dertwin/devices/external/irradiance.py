@@ -53,3 +53,6 @@ class IrradianceModel:
 
     def get_irradiance(self) -> float:
         return max(self._irradiance, 0.0)
+
+    def set_irradiance(self, irradiance: float):
+        self._irradiance = irradiance

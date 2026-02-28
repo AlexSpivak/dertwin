@@ -116,3 +116,17 @@ class GridVoltageModel:
 
     def get_voltage_ln(self) -> float:
         return self._voltage / math.sqrt(3)
+
+class ConstantGridVoltageModel(GridVoltageModel):
+    def __init__(self, voltage_ll: float = 400.0):
+        super().__init__()
+        self._voltage_ll = voltage_ll
+
+    def update(self, sim_time: float, dt: float):
+        pass
+
+    def get_voltage_ll(self) -> float:
+        return self._voltage_ll
+
+    def get_voltage_ln(self) -> float:
+        return self._voltage_ll / math.sqrt(3)

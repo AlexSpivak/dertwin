@@ -28,6 +28,7 @@ class SimulationEngine:
         self.devices = devices
         self.clock = clock
         self.external_models = external_models
+        self.sim_time = self.clock.time
 
         self._running = False
         self._tick_count = 0
@@ -60,14 +61,14 @@ class SimulationEngine:
     async def step_once(self):
 
         dt = self.clock.step
-        sim_time = self.clock.time
+        self.sim_time = self.clock.time
 
         # =====================================================
         # STEP EXTERNAL FIRST
         # =====================================================
 
         if self.external_models:
-            self.external_models.update(sim_time, dt)
+            self.external_models.update(self.sim_time, dt)
 
         # =====================================================
         # STEP DEVICES
@@ -85,7 +86,7 @@ class SimulationEngine:
         if self._tick_count % 100 == 0:
             logger.info(
                 "Simulation tick | t=%.2fs | ticks=%d",
-                sim_time,
+                self.sim_time,
                 self._tick_count,
             )
 
