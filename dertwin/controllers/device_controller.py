@@ -38,7 +38,6 @@ class DeviceController:
         self.device.update(dt)
 
         telemetry = self.device.get_telemetry().to_dict()
-        print(telemetry)
         self.apply_telemetry(telemetry)
 
     def collect_commands(self) -> Dict[str, float]:

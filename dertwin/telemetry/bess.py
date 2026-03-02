@@ -12,33 +12,33 @@ class BESSTelemetry(TelemetryBase):
     """
 
     # Electrical
-    service_voltage: float          # V
-    service_current: float          # A
-    active_power: float             # kW
-    reactive_power: float           # kVAR
-    apparent_power: float           # kVA
+    service_voltage: float
+    service_current: float
+    active_power: float
+    reactive_power: float
+    apparent_power: float
 
     # Battery state
-    system_soc: float               # %
-    system_soh: float               # %
-    battery_temperature: float     # °C
+    system_soc: float
+    system_soh: float
+    battery_temperature: float
 
     # Capability
-    available_charging_power: float     # kW
-    available_discharging_power: float  # kW
-    max_charge_power: float            # kW
-    max_discharge_power: float         # kW
+    available_charging_power: float
+    available_discharging_power: float
+    max_charge_power: float
+    max_discharge_power: float
 
     # Energy counters
-    total_charge_energy: float         # kWh
-    total_discharge_energy: float      # kWh
+    total_charge_energy: float
+    total_discharge_energy: float
     charge_and_discharge_cycles: float
 
     # Grid
-    grid_frequency: float              # Hz
-    grid_voltage_ab: float             # V
-    grid_voltage_bc: float             # V
-    grid_voltage_ca: float             # V
+    grid_frequency: float
+    grid_voltage_ab: float
+    grid_voltage_bc: float
+    grid_voltage_ca: float
 
     # Controller
     working_status: int = 0
