@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Dict, Any
 from dertwin.devices.bess.bess import BESSModel
+from dertwin.telemetry.bess import BESSTelemetry
 
 
 @dataclass
@@ -136,21 +137,19 @@ class BESSController:
     # Simulation Step
     # -------------------------------------------------
 
-    def step(self, dt: float) -> Dict[str, float]:
+    def step(self, dt: float) -> BESSTelemetry:
 
         # Enforce stop or fault
         if self.state.run_mode != 1 or self.state.fault_code != 0:
             self.bess.set_power_command(0.0)
 
-        telemetry = self.bess.step(dt)
+        telemetry: BESSTelemetry = self.bess.step(dt)
 
         self.evaluate_faults()
 
-        telemetry.update({
-            "working_status": self.working_status(),
-            "fault_code": self.state.fault_code,
-            "local_remote_mode": self.state.local_remote_settings,
-            "power_control_mode": self.state.power_control_mode,
-        })
+        telemetry.working_status = self.working_status()
+        telemetry.fault_code = self.state.fault_code
+        telemetry.local_remote_mode = self.state.local_remote_settings
+        telemetry.power_control_mode = self.state.power_control_mode
 
         return telemetry

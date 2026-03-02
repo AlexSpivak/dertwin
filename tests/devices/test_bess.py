@@ -40,7 +40,7 @@ def test_soc_updates_correctly():
     prev_soc = bess.soc
     bess.update(dt=0.1)
     result = bess.get_telemetry()
-    assert result["system_soc"] < prev_soc # discharged SoC a little on simulation
+    assert result.system_soc < prev_soc # discharged SoC a little on simulation
 
 def test_realistic_charge_discharge_cycle():
     bess = BESSSimulator(ramp_rate_kw_per_s=5.0)

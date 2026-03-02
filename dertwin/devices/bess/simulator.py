@@ -8,6 +8,7 @@ from dertwin.devices.bess.controller import BESSController
 from dertwin.devices.external.ambient_temperature import AmbientTemperatureModel
 from dertwin.devices.external.grid_frequency import GridFrequencyModel
 from dertwin.devices.external.grid_voltage import GridVoltageModel
+from dertwin.telemetry.bess import BESSTelemetry
 
 
 class BESSSimulator(SimulatedDevice):
@@ -44,14 +45,14 @@ class BESSSimulator(SimulatedDevice):
         self.bess = BESSModel(self.battery, self.inverter)
         self.controller = BESSController(self.bess)
 
-        self._last_telemetry: Dict[str, float] = {}
+        self._last_telemetry: BESSTelemetry = BESSTelemetry.zero()
 
         self.ambient_temp_model = ambient_temp_model
         self.grid_frequency_model = grid_frequency_model
         self.grid_voltage_model = grid_voltage_model
 
     # =========================================================
-    # ---- Compatibility Properties (OLD API)
+    # ---- Compatibility Properties
     # =========================================================
 
     @property
@@ -186,9 +187,9 @@ class BESSSimulator(SimulatedDevice):
             voltage = self.grid_voltage_model.get_voltage_ll()
             self.inverter.set_grid_voltage(voltage)
 
-        self._last_telemetry = self.controller.step(dt)
+        self._last_telemetry: BESSTelemetry = self.controller.step(dt)
 
-    def get_telemetry(self) -> Dict[str, float]:
+    def get_telemetry(self) -> BESSTelemetry:
         return self._last_telemetry
 
     def apply_commands(self, commands: Dict[str, float]) -> Dict[str, float]:

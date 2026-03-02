@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Dict
 
+from dertwin.telemetry.base import TelemetryBase
+
 
 class SimulatedDevice(ABC):
 
@@ -9,7 +11,7 @@ class SimulatedDevice(ABC):
         pass
 
     @abstractmethod
-    def get_telemetry(self) -> Dict[str, float]:
+    def get_telemetry(self) -> TelemetryBase:
         pass
 
     @abstractmethod

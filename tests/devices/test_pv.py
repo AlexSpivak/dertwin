@@ -27,8 +27,8 @@ def test_zero_irradiance_produces_zero_power():
 
     telemetry = inv.get_telemetry()
 
-    assert telemetry["total_active_power"] == 0.0
-    assert telemetry["inverter_status"] == 0
+    assert telemetry.total_active_power == 0.0
+    assert telemetry.inverter_status == 0
 
 
 # =========================================================
@@ -116,8 +116,8 @@ def test_grid_voltage_fault_stops_production():
 
     telemetry = inv.get_telemetry()
 
-    assert telemetry["total_active_power"] == 0.0
-    assert telemetry["fault_code"] != 0
+    assert telemetry.total_active_power == 0.0
+    assert telemetry.fault_code != 0
 
 
 # =========================================================

@@ -38,9 +38,9 @@ def test_import_energy_accumulates():
 
     telemetry = meter.get_telemetry()
 
-    assert telemetry["total_active_power"] == 10.0
-    assert pytest.approx(telemetry["total_import_energy"], 0.001) == 10.0
-    assert telemetry["total_export_energy"] == 0.0
+    assert telemetry.total_active_power == 10.0
+    assert pytest.approx(telemetry.total_import_energy, 0.001) == 10.0
+    assert telemetry.total_export_energy == 0.0
 
 
 # --------------------------------------------------
@@ -56,9 +56,9 @@ def test_export_energy_accumulates():
 
     telemetry = meter.get_telemetry()
 
-    assert telemetry["total_active_power"] == -10.0
-    assert pytest.approx(telemetry["total_export_energy"], 0.001) == 10.0
-    assert telemetry["total_import_energy"] == 0.0
+    assert telemetry.total_active_power == -10.0
+    assert pytest.approx(telemetry.total_export_energy, 0.001) == 10.0
+    assert telemetry.total_import_energy == 0.0
 
 
 # --------------------------------------------------
@@ -73,9 +73,9 @@ def test_zero_grid_flow():
 
     telemetry = meter.get_telemetry()
 
-    assert pytest.approx(telemetry["total_active_power"], 0.001) == 0.0
-    assert telemetry["total_import_energy"] == 0.0
-    assert telemetry["total_export_energy"] == 0.0
+    assert pytest.approx(telemetry.total_active_power, 0.001) == 0.0
+    assert telemetry.total_import_energy == 0.0
+    assert telemetry.total_export_energy == 0.0
 
 
 # --------------------------------------------------
@@ -91,7 +91,7 @@ def test_energy_accumulates_over_multiple_updates():
 
     telemetry = meter.get_telemetry()
 
-    assert pytest.approx(telemetry["total_import_energy"], 0.001) == 2.0
+    assert pytest.approx(telemetry.total_import_energy, 0.001) == 2.0
 
 
 # --------------------------------------------------
@@ -106,4 +106,4 @@ def test_sign_convention_export_negative():
 
     telemetry = meter.get_telemetry()
 
-    assert telemetry["total_active_power"] < 0
+    assert telemetry.total_active_power < 0

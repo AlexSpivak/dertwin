@@ -1,6 +1,7 @@
 from dertwin.devices.pv.inverter import PVInverterModel
 from dertwin.devices.pv.panel import PVArrayModel
 from dertwin.devices.pv.pv import PVModel
+from dertwin.telemetry.pv import PVTelemetry
 
 
 def build_system():
@@ -37,7 +38,7 @@ def test_telemetry_structure():
     pv.panel.set_irradiance(1000)
     pv.step(1.0)
 
-    telemetry = pv.get_telemetry()
+    telemetry = pv.get_telemetry().to_dict()
 
     assert "total_active_power" in telemetry
     assert "today_output_energy" in telemetry

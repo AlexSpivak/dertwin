@@ -2,6 +2,8 @@ import math
 import random
 from typing import Dict
 
+from dertwin.telemetry.energy_meter import EnergyMeterTelemetry
+
 
 class EnergyMeterModel:
     """
@@ -33,7 +35,7 @@ class EnergyMeterModel:
         export_energy_kwh: float,
         grid_frequency: float,
         voltage_ll: float,
-    ) -> Dict[str, float]:
+    ) -> EnergyMeterTelemetry:
 
         # deterministic PF drift
         pf_target = self._rng.uniform(0.95, 1.0)
@@ -47,20 +49,17 @@ class EnergyMeterModel:
 
         voltage_ln = voltage_ll / math.sqrt(3.0)
 
-        return {
-            "total_active_power": grid_power_kw,
-            "total_reactive_power": reactive_power,
-            "total_power_factor": self._pf,
-            "grid_frequency": grid_frequency,
-
-            "phase_voltage_a": voltage_ln,
-            "phase_voltage_b": voltage_ln,
-            "phase_voltage_c": voltage_ln,
-
-            "phase_active_power_a": phase_power,
-            "phase_active_power_b": phase_power,
-            "phase_active_power_c": phase_power,
-
-            "total_import_energy": import_energy_kwh,
-            "total_export_energy": export_energy_kwh,
-        }
+        return EnergyMeterTelemetry(
+            total_active_power=grid_power_kw,
+            total_reactive_power=reactive_power,
+            total_power_factor=self._pf,
+            grid_frequency=grid_frequency,
+            phase_voltage_a=voltage_ln,
+            phase_voltage_b=voltage_ln,
+            phase_voltage_c=voltage_ln,
+            phase_active_power_a=phase_power,
+            phase_active_power_b=phase_power,
+            phase_active_power_c=phase_power,
+            total_export_energy=export_energy_kwh,
+            total_import_energy=import_energy_kwh,
+        )

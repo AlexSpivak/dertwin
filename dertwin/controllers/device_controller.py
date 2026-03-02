@@ -18,9 +18,6 @@ class DeviceController:
         self.device = device
         self.protocols = protocols
         self.register_map = register_map
-
-        self._last_commands: Dict[str, float] = {}
-
         self._last_commands: Dict[str, float] = {}
         self._initialized = False
 
@@ -40,7 +37,8 @@ class DeviceController:
 
         self.device.update(dt)
 
-        telemetry = self.device.get_telemetry()
+        telemetry = self.device.get_telemetry().to_dict()
+        print(telemetry)
         self.apply_telemetry(telemetry)
 
     def collect_commands(self) -> Dict[str, float]:

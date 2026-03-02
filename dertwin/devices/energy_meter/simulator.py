@@ -5,6 +5,7 @@ from dertwin.devices.energy_meter.model import EnergyMeterModel
 from dertwin.devices.external.grid_voltage import GridVoltageModel
 from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.external.grid_frequency import GridFrequencyModel
+from dertwin.telemetry.energy_meter import EnergyMeterTelemetry
 
 
 class EnergyMeterSimulator(SimulatedDevice):
@@ -30,7 +31,7 @@ class EnergyMeterSimulator(SimulatedDevice):
 
         self.model = EnergyMeterModel(seed=seed)
 
-        self._last_telemetry: Dict[str, float] = {}
+        self._last_telemetry: EnergyMeterTelemetry = EnergyMeterTelemetry.zero()
 
     # --------------------------------------------------
     # Simulation Step
@@ -52,7 +53,7 @@ class EnergyMeterSimulator(SimulatedDevice):
     # --------------------------------------------------
     # Telemetry
     # --------------------------------------------------
-    def get_telemetry(self) -> Dict[str, float]:
+    def get_telemetry(self) -> EnergyMeterTelemetry:
         return self._last_telemetry
 
     # --------------------------------------------------

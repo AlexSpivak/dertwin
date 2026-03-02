@@ -136,8 +136,8 @@ def test_controller_updates_inverter_power():
     # We verify:
     #   - power is positive
     #   - does not exceed rated AC power
-    assert telemetry["total_active_power"] > 0.0
-    assert telemetry["total_active_power"] <= pv.rated_power_w
+    assert telemetry.total_active_power > 0.0
+    assert telemetry.total_active_power <= pv.rated_power_w
 
 
 def test_controller_inverter_energy_accumulates():
@@ -205,9 +205,9 @@ def test_controller_updates_energy_meter_import():
 
     telemetry = meter.get_telemetry()
 
-    assert telemetry["total_active_power"] == 10.0
-    assert pytest.approx(telemetry["total_import_energy"], 0.001) == 10.0
-    assert telemetry["total_export_energy"] == 0.0
+    assert telemetry.total_active_power == 10.0
+    assert pytest.approx(telemetry.total_import_energy, 0.001) == 10.0
+    assert telemetry.total_export_energy == 0.0
 
 
 def test_controller_updates_energy_meter_export():
@@ -227,9 +227,9 @@ def test_controller_updates_energy_meter_export():
 
     telemetry = meter.get_telemetry()
 
-    assert telemetry["total_active_power"] == -10.0
-    assert pytest.approx(telemetry["total_export_energy"], 0.001) == 10.0
-    assert telemetry["total_import_energy"] == 0.0
+    assert telemetry.total_active_power == -10.0
+    assert pytest.approx(telemetry.total_export_energy, 0.001) == 10.0
+    assert telemetry.total_import_energy == 0.0
 
 
 def test_controller_meter_is_passive_to_commands():
@@ -249,4 +249,4 @@ def test_controller_meter_is_passive_to_commands():
 
     # Meter ignores commands — still behaves normally
     telemetry = meter.get_telemetry()
-    assert telemetry["total_active_power"] == 5.0
+    assert telemetry.total_active_power == 5.0

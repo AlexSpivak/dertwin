@@ -98,6 +98,36 @@ registers:
     scale: 1
     unit: ""
 
+  - name: phase_neutral_voltage_1
+    internal_name: phase_neutral_voltage_1
+    address: 38
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
+
+  - name: phase_neutral_voltage_2
+    internal_name: phase_neutral_voltage_2
+    address: 42
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
+
+  - name: phase_neutral_voltage_3
+    internal_name: phase_neutral_voltage_3
+    address: 46
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
+
 
   # ==========================================================
   # COMMANDS (WRITE)

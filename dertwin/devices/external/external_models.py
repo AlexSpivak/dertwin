@@ -82,11 +82,11 @@ class ExternalModels:
         return SitePowerModel(
             base_load_supplier=lambda t: base_load,
             pv_supplier=lambda: sum(
-                p.get_telemetry().get("total_active_power", 0.0)
+                p.get_telemetry().total_active_power
                 for p in pv_devices
             ),
             bess_supplier=lambda: sum(
-                b.get_telemetry().get("active_power", 0.0) * 1000.0
+                b.get_telemetry().active_power * 1000.0
                 for b in bess_devices
             ),
         )

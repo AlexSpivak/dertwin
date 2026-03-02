@@ -9,6 +9,7 @@ from dertwin.devices.pv.panel import PVArrayModel
 from dertwin.devices.pv.inverter import PVInverterModel
 from dertwin.devices.pv.pv import PVModel
 from dertwin.devices.pv.controller import PVController
+from dertwin.telemetry.pv import PVTelemetry
 
 
 class PVSimulator(SimulatedDevice):
@@ -54,7 +55,7 @@ class PVSimulator(SimulatedDevice):
         self.pv = PVModel(self.panel, self.inverter)
         self.controller = PVController(self.pv)
 
-        self._last_telemetry: Dict[str, float] = {}
+        self._last_telemetry: PVTelemetry = PVTelemetry.zero()
 
 
         self.ambient_temp_model = ambient_temp_model
@@ -132,7 +133,7 @@ class PVSimulator(SimulatedDevice):
 
         self._last_telemetry = self.controller.step(dt)
 
-    def get_telemetry(self) -> Dict[str, float]:
+    def get_telemetry(self) -> PVTelemetry:
         return self._last_telemetry
 
     def apply_commands(self, commands: Dict[str, float]) -> Dict[str, float]:

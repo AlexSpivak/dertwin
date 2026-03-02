@@ -7,9 +7,11 @@ from pymodbus.client import AsyncModbusTcpClient
 
 from dertwin.controllers.site_controller import SiteController
 from dertwin.core.registers import RegisterMap
+from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
 from dertwin.devices.external.grid_frequency import FrequencyEvent
 from dertwin.devices.external.grid_voltage import VoltageEvent
 from dertwin.devices.pv.simulator import PVSimulator
+from dertwin.telemetry.energy_meter import EnergyMeterTelemetry
 
 TEST_CONFIG = {
     "site_name": "integration-test-site",
@@ -154,7 +156,7 @@ async def test_full_site_modbus_telemetry():
 
                 raw = decode_registers(response.registers, r)
 
-                device_value = controller.device.get_telemetry().get(r.name)
+                device_value = controller.device.get_telemetry().to_dict().get(r.name)
 
                 if device_value is None:
                     continue
@@ -176,7 +178,7 @@ async def test_full_site_modbus_telemetry():
         await bess_client.connect()
 
         # Initial SOC
-        initial_soc = bess_controller.device.get_telemetry()["system_soc"]
+        initial_soc = bess_controller.device.get_telemetry().system_soc
 
         # Command discharge 50 kW
         value = int(50 / 0.1)  # scale 0.1
@@ -188,7 +190,7 @@ async def test_full_site_modbus_telemetry():
 
         await run_steps(site, 2000)
 
-        new_soc = bess_controller.device.get_telemetry()["system_soc"]
+        new_soc = bess_controller.device.get_telemetry().system_soc
 
         # SOC should decrease during discharge
         assert new_soc < initial_soc
@@ -204,7 +206,7 @@ async def test_full_site_modbus_telemetry():
 
         await run_steps(site, 2000)
 
-        charged_soc = bess_controller.device.get_telemetry()["system_soc"]
+        charged_soc = bess_controller.device.get_telemetry().system_soc
 
         assert charged_soc > new_soc
 
@@ -232,16 +234,16 @@ async def test_full_site_modbus_telemetry():
         telemetry = pv_device.get_telemetry()
 
         # PV should be producing
-        assert telemetry["total_active_power"] > 0.0
-        assert telemetry["total_active_power"] <= pv_device.rated_power_w
+        assert telemetry.total_active_power > 0.0
+        assert telemetry.total_active_power <= pv_device.rated_power_w
 
-        initial_energy = telemetry["today_output_energy"]
+        initial_energy = telemetry.today_output_energy
 
         # Run longer to accumulate energy
         await run_steps(site, 2000)
 
         telemetry_after = pv_device.get_telemetry()
-        new_energy = telemetry_after["today_output_energy"]
+        new_energy = telemetry_after.today_output_energy
 
         # Energy must increase
         assert new_energy > initial_energy
@@ -257,9 +259,9 @@ async def test_full_site_modbus_telemetry():
 
         em_device = em_controller.device
 
-        baseline = em_device.get_telemetry()
-        baseline_import = baseline["total_import_energy"]
-        baseline_export = baseline["total_export_energy"]
+        baseline: EnergyMeterTelemetry = em_device.get_telemetry()
+        baseline_import = baseline.total_import_energy
+        baseline_export = baseline.total_export_energy
 
         # ----------------------------------------------------------
         # Strong PV production → expect export
@@ -269,12 +271,12 @@ async def test_full_site_modbus_telemetry():
 
         await run_steps(site, 2000)
 
-        telemetry_export = em_device.get_telemetry()
+        telemetry_export: EnergyMeterTelemetry = em_device.get_telemetry()
 
-        assert telemetry_export["total_active_power"] <= 0.0
-        assert telemetry_export["total_export_energy"] > baseline_export
+        assert telemetry_export.total_active_power <= 0.0
+        assert telemetry_export.total_export_energy > baseline_export
 
-        export_after = telemetry_export["total_export_energy"]
+        export_after = telemetry_export.total_export_energy
 
         # ----------------------------------------------------------
         # Force import by stopping PV
@@ -284,13 +286,13 @@ async def test_full_site_modbus_telemetry():
 
         await run_steps(site, 2000)
 
-        telemetry_import = em_device.get_telemetry()
+        telemetry_import: EnergyMeterTelemetry = em_device.get_telemetry()
 
-        assert telemetry_import["total_active_power"] >= 0.0
-        assert telemetry_import["total_import_energy"] > baseline_import
+        assert telemetry_import.total_active_power >= 0.0
+        assert telemetry_import.total_import_energy > baseline_import
 
         # Ensure export did not decrease (monotonic accumulation)
-        assert telemetry_import["total_export_energy"] >= export_after
+        assert telemetry_import.total_export_energy >= export_after
 
         # ==========================================================
         # DETERMINISTIC GRID MODEL TEST
@@ -303,30 +305,27 @@ async def test_full_site_modbus_telemetry():
 
         em_device = em_controller.device
 
-        telemetry = em_device.get_telemetry()
+        telemetry: EnergyMeterTelemetry = em_device.get_telemetry()
 
-        # Frequency must exist and be deterministic
-        assert "grid_frequency" in telemetry
-        assert telemetry["grid_frequency"] == pytest.approx(50.0, abs=1e-6)
+        # Frequency must be deterministic
+        assert telemetry.grid_frequency == pytest.approx(50.0, abs=1e-6)
 
-        # Voltage must exist and be deterministic
-        assert "phase_voltage_a" in telemetry
-        assert "phase_voltage_b" in telemetry
-        assert "phase_voltage_c" in telemetry
-
+        # Voltage must be deterministic
         expected_ln = 400.0 / math.sqrt(3.0)
 
-        assert telemetry["phase_voltage_a"] == pytest.approx(expected_ln, abs=1e-6)
-        assert telemetry["phase_voltage_b"] == pytest.approx(expected_ln, abs=1e-6)
-        assert telemetry["phase_voltage_c"] == pytest.approx(expected_ln, abs=1e-6)
+        assert telemetry.phase_voltage_a == pytest.approx(expected_ln, abs=1e-6)
+        assert telemetry.phase_voltage_b == pytest.approx(expected_ln, abs=1e-6)
+        assert telemetry.phase_voltage_c == pytest.approx(expected_ln, abs=1e-6)
 
         # Verify stability across steps
         await run_steps(site, 100)
 
-        telemetry2 = em_device.get_telemetry()
+        telemetry2: EnergyMeterTelemetry = em_device.get_telemetry()
 
-        assert telemetry2["grid_frequency"] == pytest.approx(50.0, abs=1e-6)
-        assert telemetry2["phase_voltage_a"] == pytest.approx(expected_ln, abs=1e-6)
+        assert telemetry2.grid_frequency == pytest.approx(50.0, abs=1e-6)
+        assert telemetry2.phase_voltage_a == pytest.approx(expected_ln, abs=1e-6)
+        assert telemetry2.phase_voltage_b == pytest.approx(expected_ln, abs=1e-6)
+        assert telemetry2.phase_voltage_c == pytest.approx(expected_ln, abs=1e-6)
 
     finally:
         await site.stop()
@@ -451,7 +450,7 @@ async def test_external_models_full_integration():
         await run_steps(site, 50)
 
         pv: PVSimulator = get_controller(site, "pv").device
-        meter = get_controller(site, "energy").device
+        meter: EnergyMeterSimulator = get_controller(site, "energy").device
 
         external = site.external_models
 
@@ -463,7 +462,7 @@ async def test_external_models_full_integration():
 
         for _ in range(100):
             await run_steps(site, 1)
-            power_samples.append(pv.get_telemetry()["total_active_power"])
+            power_samples.append(pv.get_telemetry().total_active_power)
 
         assert max(power_samples) > 0.0
         assert max(power_samples) <= pv.rated_power_w
@@ -471,7 +470,7 @@ async def test_external_models_full_integration():
         site.engine.clock.reset()
         for _ in range(100):
             await run_steps(site, 1)
-            power_samples.append(pv.get_telemetry()["total_active_power"])
+            power_samples.append(pv.get_telemetry().total_active_power)
 
         # Should have both day and night values
         assert min(power_samples) == pytest.approx(0.0, abs=1e-3)
@@ -547,11 +546,11 @@ async def test_external_models_full_integration():
         # TEST 5 — ENERGY METER EXPORT DURING PV PEAK
         # ==========================================================
         site.engine.clock.time = 12 * 3600  # set clock to noon
-        export_before = meter.get_telemetry()["total_export_energy"]
+        export_before = meter.get_telemetry().total_export_energy
 
         await run_steps(site, 5000)
 
-        export_after = meter.get_telemetry()["total_export_energy"]
+        export_after = meter.get_telemetry().total_export_energy
 
         assert export_after > export_before
 
@@ -560,12 +559,12 @@ async def test_external_models_full_integration():
         # TEST 6 — IMPORT DURING LOW IRRADIANCE
         # ==========================================================
 
-        import_before = meter.get_telemetry()["total_import_energy"]
+        import_before = meter.get_telemetry().total_import_energy
 
         # fast-forward to night
         await run_steps(site, 5000)
 
-        import_after = meter.get_telemetry()["total_import_energy"]
+        import_after = meter.get_telemetry().total_import_energy
 
         assert import_after > import_before
 
