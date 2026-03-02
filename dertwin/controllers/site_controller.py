@@ -1,16 +1,19 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 
 from dertwin.core.clock import SimulationClock
 from dertwin.core.engine import SimulationEngine
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap
-from dertwin.devices.bess import BESSSimulator
-from dertwin.devices.inverter import InverterSimulator
-from dertwin.devices.energy_meter import EnergyMeterSimulator
-from dertwin.devices.grid_frequency import GridFrequencyModel
+
+from dertwin.devices.bess.simulator import BESSSimulator
+from dertwin.devices.pv.simulator import PVSimulator
+from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
+
+from dertwin.devices.external.external_models import ExternalModels
+
 from dertwin.protocol.modbus import ModbusSimulator
 
 logger = logging.getLogger(__name__)
@@ -39,35 +42,46 @@ class SiteController:
         self._built = False
         self._running = False
 
-    # ------------------------------------------------------------------
-    # BUILD
-    # ------------------------------------------------------------------
+        self.external_models: Optional[ExternalModels] = None
+
+    # ==========================================================
+    # BUILD SITE
+    # ==========================================================
 
     def build(self) -> None:
         logger.info("Building site: %s", self.config.get("site_name", "unnamed"))
+
+
+        if self.config.get("external_models"):
+            self.external_models = ExternalModels.from_config(self.config.get("external_models"))
+        else:
+            self.external_models = ExternalModels.build_default()
 
         devices_by_type: Dict[str, List] = {}
         devices: List = []
 
         # Create devices
-        for asset in self.config["assets"]:
+        for asset in [a for a in self.config["assets"] if a["type"] != "energy_meter"]:
             device = self._create_device(asset)
             devices.append(device)
             devices_by_type.setdefault(asset["type"], []).append(device)
 
-        # Cross-wire dependencies
-        bess_devices = devices_by_type.get("bess", [])
-        inverter_devices = devices_by_type.get("inverter", [])
-        meter_devices = devices_by_type.get("energy_meter", [])
+        self.external_models.power_model = ExternalModels.build_power_model(devices_by_type, self.config.get("power_model"))
 
-        if meter_devices:
-            for meter in meter_devices:
-                meter.pv_supplier = lambda inv=inverter_devices: sum(
-                    i.active_power_w for i in inv
-                )
-                meter.bess_supplier = lambda b=bess_devices: sum(
-                    bs.commanded_power_kw * 1000.0 for bs in b
-                )
+
+        # ------------------------------------------------------
+        # Create Energy Meters
+        # ------------------------------------------------------
+
+        for _ in [a for a in self.config["assets"] if a["type"] == "energy_meter"]:
+            meter = EnergyMeterSimulator(
+                power_model=self.external_models.power_model,
+                grid_model=self.external_models.grid_frequency_model,
+                grid_voltage_model=self.external_models.grid_voltage_model,
+            )
+
+            devices.append(meter)
+            devices_by_type.setdefault("energy_meter", []).append(meter)
 
         # Create controllers + protocols
         for asset, device in zip(self.config["assets"], devices):
@@ -99,10 +113,10 @@ class SiteController:
 
                 self.controllers.append(controller)
 
-        # Engine
         self.engine = SimulationEngine(
             devices=self.controllers,
             clock=self.clock,
+            external_models=self.external_models,
         )
 
         self._built = True
@@ -161,15 +175,18 @@ class SiteController:
         dtype = asset_cfg["type"]
 
         if dtype == "bess":
-            return BESSSimulator()
-
-        if dtype == "inverter":
-            return InverterSimulator()
-
-        if dtype == "energy_meter":
-            return EnergyMeterSimulator(
-                base_load_supplier=lambda t: 5.0,
-                grid_frequency_model=GridFrequencyModel(),
+            return BESSSimulator(
+                ambient_temp_model=self.external_models.ambient_temperature_model,
+                grid_voltage_model=self.external_models.grid_voltage_model,
+                grid_frequency_model=self.external_models.grid_frequency_model,
             )
 
-        raise ValueError(f"Unknown asset type: {dtype}")
+        if dtype == "inverter":
+            return PVSimulator(
+                ambient_temp_model=self.external_models.ambient_temperature_model,
+                grid_voltage_model=self.external_models.grid_voltage_model,
+                grid_frequency_model=self.external_models.grid_frequency_model,
+                irradiance_model=self.external_models.irradiance_model,
+            )
+
+        raise ValueError(f"Unknown or unsupported asset type: {dtype}")

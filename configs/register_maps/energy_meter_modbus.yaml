@@ -8,11 +8,8 @@ registers:
   # TELEMETRY (READ)
   # ==========================================================
 
-  # ----------------------
-  # Basic / Essential
-  # ----------------------
-
   - name: total_active_power
+    internal_name: total_active_power
     address: 0
     func: 0x04
     direction: read
@@ -22,6 +19,7 @@ registers:
     unit: kW
 
   - name: total_reactive_power
+    internal_name: total_reactive_power
     address: 2
     func: 0x04
     direction: read
@@ -31,6 +29,7 @@ registers:
     unit: kVar
 
   - name: total_power_factor
+    internal_name: total_power_factor
     address: 12
     func: 0x04
     direction: read
@@ -40,6 +39,7 @@ registers:
     unit: ""
 
   - name: grid_frequency
+    internal_name: grid_frequency
     address: 13
     func: 0x04
     direction: read
@@ -49,6 +49,7 @@ registers:
     unit: Hz
 
   - name: total_import_energy
+    internal_name: total_import_energy
     address: 26
     func: 0x04
     direction: read
@@ -58,6 +59,7 @@ registers:
     unit: kWh
 
   - name: total_export_energy
+    internal_name: total_export_energy
     address: 28
     func: 0x04
     direction: read
@@ -68,11 +70,11 @@ registers:
 
 
   # ----------------------
-  # Advanced Telemetry
+  # Phase A
   # ----------------------
 
-  # Phase A
   - name: phase_voltage_a
+    internal_name: phase_voltage_a
     address: 14
     func: 0x04
     direction: read
@@ -82,6 +84,7 @@ registers:
     unit: V
 
   - name: phase_current_a
+    internal_name: phase_current_a
     address: 15
     func: 0x04
     direction: read
@@ -91,6 +94,7 @@ registers:
     unit: A
 
   - name: phase_active_power_a
+    internal_name: phase_active_power_a
     address: 16
     func: 0x04
     direction: read
@@ -99,8 +103,13 @@ registers:
     scale: 0.01
     unit: kW
 
+
+  # ----------------------
   # Phase B
+  # ----------------------
+
   - name: phase_voltage_b
+    internal_name: phase_voltage_b
     address: 18
     func: 0x04
     direction: read
@@ -110,6 +119,7 @@ registers:
     unit: V
 
   - name: phase_current_b
+    internal_name: phase_current_b
     address: 19
     func: 0x04
     direction: read
@@ -119,6 +129,7 @@ registers:
     unit: A
 
   - name: phase_active_power_b
+    internal_name: phase_active_power_b
     address: 20
     func: 0x04
     direction: read
@@ -127,8 +138,13 @@ registers:
     scale: 0.01
     unit: kW
 
+
+  # ----------------------
   # Phase C
+  # ----------------------
+
   - name: phase_voltage_c
+    internal_name: phase_voltage_c
     address: 22
     func: 0x04
     direction: read
@@ -138,6 +154,7 @@ registers:
     unit: V
 
   - name: phase_current_c
+    internal_name: phase_current_c
     address: 23
     func: 0x04
     direction: read
@@ -147,6 +164,7 @@ registers:
     unit: A
 
   - name: phase_active_power_c
+    internal_name: phase_active_power_c
     address: 24
     func: 0x04
     direction: read
@@ -155,8 +173,13 @@ registers:
     scale: 0.01
     unit: kW
 
+
+  # ----------------------
   # Apparent Power
+  # ----------------------
+
   - name: apparent_power_a
+    internal_name: apparent_power_a
     address: 30
     func: 0x04
     direction: read
@@ -166,6 +189,7 @@ registers:
     unit: kVA
 
   - name: apparent_power_b
+    internal_name: apparent_power_b
     address: 32
     func: 0x04
     direction: read
@@ -175,6 +199,7 @@ registers:
     unit: kVA
 
   - name: apparent_power_c
+    internal_name: apparent_power_c
     address: 34
     func: 0x04
     direction: read
@@ -183,8 +208,13 @@ registers:
     scale: 0.0001
     unit: kVA
 
+
+  # ----------------------
   # Reactive Power
+  # ----------------------
+
   - name: reactive_power_a
+    internal_name: reactive_power_a
     address: 36
     func: 0x04
     direction: read
@@ -194,6 +224,7 @@ registers:
     unit: kVar
 
   - name: reactive_power_b
+    internal_name: reactive_power_b
     address: 38
     func: 0x04
     direction: read
@@ -203,6 +234,7 @@ registers:
     unit: kVar
 
   - name: reactive_power_c
+    internal_name: reactive_power_c
     address: 40
     func: 0x04
     direction: read
@@ -217,6 +249,7 @@ registers:
   # ==========================================================
 
   - name: current_transformer_ratio
+    internal_name: current_transformer_ratio
     address: 4099
     func: 0x06
     direction: write
@@ -225,6 +258,7 @@ registers:
     scale: 0.1
 
   - name: voltage_transformer_ratio
+    internal_name: voltage_transformer_ratio
     address: 4101
     func: 0x06
     direction: write
@@ -233,6 +267,7 @@ registers:
     scale: 0.1
 
   - name: interval_time
+    internal_name: interval_time
     address: 4112
     func: 0x06
     direction: write

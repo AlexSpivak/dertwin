@@ -13,6 +13,7 @@ registers:
   # ----------------------
 
   - name: service_voltage
+    internal_name: service_voltage
     address: 32000
     func: 0x04
     direction: read
@@ -22,6 +23,7 @@ registers:
     unit: V
 
   - name: service_current
+    internal_name: service_current
     address: 32001
     func: 0x04
     direction: read
@@ -31,6 +33,7 @@ registers:
     unit: A
 
   - name: system_soc
+    internal_name: system_soc
     address: 32002
     func: 0x04
     direction: read
@@ -40,6 +43,7 @@ registers:
     unit: "%"
 
   - name: battery_temperature
+    internal_name: battery_temperature
     address: 32184
     func: 0x04
     direction: read
@@ -53,6 +57,7 @@ registers:
   # ----------------------
 
   - name: total_charge_energy
+    internal_name: total_charge_energy
     address: 32013
     func: 0x04
     direction: read
@@ -62,6 +67,7 @@ registers:
     unit: kWh
 
   - name: total_discharge_energy
+    internal_name: total_discharge_energy
     address: 32014
     func: 0x04
     direction: read
@@ -75,6 +81,7 @@ registers:
   # ----------------------
 
   - name: active_power
+    internal_name: active_power
     address: 10059
     func: 0x04
     direction: read
@@ -84,6 +91,7 @@ registers:
     unit: kW
 
   - name: reactive_power
+    internal_name: reactive_power
     address: 10281
     func: 0x04
     direction: read
@@ -93,6 +101,7 @@ registers:
     unit: kvar
 
   - name: apparent_power
+    internal_name: apparent_power
     address: 10283
     func: 0x04
     direction: read
@@ -106,6 +115,7 @@ registers:
   # ----------------------
 
   - name: max_charge_power
+    internal_name: max_charge_power
     address: 10272
     func: 0x04
     direction: read
@@ -115,6 +125,7 @@ registers:
     unit: kW
 
   - name: max_discharge_power
+    internal_name: max_discharge_power
     address: 10273
     func: 0x04
     direction: read
@@ -128,6 +139,7 @@ registers:
   # ----------------------
 
   - name: working_status
+    internal_name: working_status
     address: 10050
     func: 0x04
     direction: read
@@ -137,6 +149,7 @@ registers:
     unit: ""
 
   - name: fault_code
+    internal_name: fault_code
     address: 32108
     func: 0x04
     direction: read
@@ -150,6 +163,7 @@ registers:
   # ----------------------
 
   - name: charge_and_discharge_cycles
+    internal_name: charge_and_discharge_cycles
     address: 32021
     func: 0x04
     direction: read
@@ -159,6 +173,7 @@ registers:
     unit: cycles
 
   - name: system_soh
+    internal_name: system_soh
     address: 32004
     func: 0x04
     direction: read
@@ -168,6 +183,7 @@ registers:
     unit: "%"
 
   - name: available_charging_power
+    internal_name: available_charging_power
     address: 10130
     func: 0x04
     direction: read
@@ -177,6 +193,7 @@ registers:
     unit: kW
 
   - name: available_discharging_power
+    internal_name: available_discharging_power
     address: 10132
     func: 0x04
     direction: read
@@ -186,6 +203,7 @@ registers:
     unit: kW
 
   - name: on_grid_power
+    internal_name: on_grid_power
     address: 10126
     func: 0x03
     direction: read
@@ -195,6 +213,7 @@ registers:
     unit: kW
 
   - name: grid_frequency
+    internal_name: grid_frequency
     address: 10245
     func: 0x04
     direction: read
@@ -202,6 +221,36 @@ registers:
     count: 1
     scale: 0.01
     unit: Hz
+
+  - name: a_b_line_voltage
+    internal_name: grid_voltage_ab
+    address: 10250
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
+
+  - name: b_c_line_voltage
+    internal_name: grid_voltage_bc
+    address: 10251
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
+
+  - name: c_a_line_voltage
+    internal_name: grid_voltage_ca
+    address: 10252
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: V
 
 
   # ==========================================================
@@ -213,6 +262,7 @@ registers:
   # ----------------------
 
   - name: start_stop_standby
+    internal_name: start_stop_standby
     address: 10055
     func: 0x06
     direction: write
@@ -228,6 +278,7 @@ registers:
   # ----------------------
 
   - name: local_remote_settings
+    internal_name: local_remote_settings
     address: 10057
     func: 0x06
     direction: write
@@ -243,6 +294,7 @@ registers:
   # ----------------------
 
   - name: power_control_mode
+    internal_name: power_control_mode
     address: 10125
     func: 0x06
     direction: write
@@ -255,6 +307,7 @@ registers:
   # ----------------------
 
   - name: on_grid_power_setpoint
+    internal_name: active_power_setpoint
     address: 10126
     func: 0x10
     direction: write
@@ -269,6 +322,7 @@ registers:
   # ----------------------
 
   - name: fault_reset
+    internal_name: fault_reset
     address: 11004
     func: 0x06
     direction: write
@@ -281,6 +335,7 @@ registers:
   # ----------------------
 
   - name: soc_upper_limit_2
+    internal_name: soc_upper_limit_2
     address: 10325
     func: 0x10
     direction: write
@@ -290,6 +345,7 @@ registers:
     unit: "%"
 
   - name: soc_upper_limit_1
+    internal_name: soc_upper_limit_1
     address: 10327
     func: 0x10
     direction: write
@@ -299,6 +355,7 @@ registers:
     unit: "%"
 
   - name: soc_lower_limit_1
+    internal_name: soc_lower_limit_1
     address: 10330
     func: 0x10
     direction: write
@@ -308,6 +365,7 @@ registers:
     unit: "%"
 
   - name: soc_lower_limit_2
+    internal_name: soc_lower_limit_2
     address: 10332
     func: 0x10
     direction: write
