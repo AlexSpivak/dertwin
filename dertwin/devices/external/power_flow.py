@@ -9,6 +9,11 @@ class SitePowerModel:
     - Aggregate load, PV and BESS
     - Compute net grid power
     - Integrate import/export energy
+
+    All supplier callables must return values in kW:
+        - base_load_supplier(sim_time) -> kW
+        - pv_supplier()               -> kW
+        - bess_supplier()             -> kW  (positive = discharge)
     """
 
     def __init__(
@@ -36,9 +41,8 @@ class SitePowerModel:
         dt_h = dt / 3600.0
 
         base_load_kw = self.base_load_supplier(self._sim_time)
-
-        pv_kw = (self.pv_supplier() / 1000.0) if self.pv_supplier else 0.0
-        bess_kw = (self.bess_supplier() / 1000.0) if self.bess_supplier else 0.0
+        pv_kw = self.pv_supplier() if self.pv_supplier else 0.0
+        bess_kw = self.bess_supplier() if self.bess_supplier else 0.0
 
         # Positive = import, Negative = export
         self.grid_power_kw = base_load_kw - pv_kw - bess_kw

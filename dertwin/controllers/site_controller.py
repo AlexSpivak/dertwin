@@ -176,6 +176,11 @@ class SiteController:
 
         if dtype == "bess":
             return BESSSimulator(
+                capacity_kwh=asset_cfg.get("capacity_kwh", 100.0),
+                initial_soc=asset_cfg.get("initial_soc", 50.0),
+                max_charge_kw=asset_cfg.get("max_charge_kw", 20.0),
+                max_discharge_kw=asset_cfg.get("max_discharge_kw", 20.0),
+                ramp_rate_kw_per_s=asset_cfg.get("ramp_rate_kw_per_s", 100.0),
                 ambient_temp_model=self.external_models.ambient_temperature_model,
                 grid_voltage_model=self.external_models.grid_voltage_model,
                 grid_frequency_model=self.external_models.grid_frequency_model,
@@ -183,6 +188,9 @@ class SiteController:
 
         if dtype == "inverter":
             return PVSimulator(
+                rated_kw=asset_cfg.get("rated_kw", 10.0),
+                module_efficiency=asset_cfg.get("module_efficiency", 0.20),
+                area_m2=asset_cfg.get("area_m2", None),
                 ambient_temp_model=self.external_models.ambient_temperature_model,
                 grid_voltage_model=self.external_models.grid_voltage_model,
                 grid_frequency_model=self.external_models.grid_frequency_model,

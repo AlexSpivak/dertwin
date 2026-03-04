@@ -61,7 +61,7 @@ For detailed architecture, design, and per-package usage, see [`dertwin/README.m
 ## 🛠 Installation
 
 ```bash
-git clone https://github.com/<your-username>/dertwin.git
+git clone https://github.com/AlexSpivak/dertwin.git
 cd dertwin
 python -m venv .venv
 source .venv/bin/activate

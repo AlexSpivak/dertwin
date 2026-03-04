@@ -24,11 +24,13 @@ class BESSController:
     - Power dispatch logic
     """
 
+    # Commands that are momentary triggers — must always execute,
+    # never deduplicated by command memory.
+    _STATELESS_COMMANDS = {"fault_reset"}
+
     def __init__(self, bess: BESSModel):
         self.bess = bess
         self.state = ControllerState()
-
-        # Prevent re-applying identical commands
         self._last_applied_commands: Dict[str, Any] = {}
 
     # -------------------------------------------------
@@ -45,10 +47,7 @@ class BESSController:
 
         if not commands:
             return {}
-
-        # Store memory
         self._last_applied_commands = dict(commands)
-
         return commands
 
     # -------------------------------------------------
@@ -56,15 +55,11 @@ class BESSController:
     # -------------------------------------------------
 
     def apply_command(self, name: str, value: Any):
-        """
-        Apply command with memory protection.
-        """
-
-        # Skip if identical to last applied
-        if self._last_applied_commands.get(name) == value:
-            return
-
-        self._last_applied_commands[name] = value
+        # Stateless/momentary commands always execute — never deduplicated
+        if name not in self._STATELESS_COMMANDS:
+            if self._last_applied_commands.get(name) == value:
+                return
+            self._last_applied_commands[name] = value
 
         self._apply_without_memory_update(name, value)
 
@@ -105,6 +100,11 @@ class BESSController:
         elif name == "fault_reset":
             if int(value) == 1:
                 self.state.fault_code = 0
+                # Re-apply last known power setpoint so dispatch resumes
+                # without requiring a new command from the EMS.
+                last_setpoint = self._last_applied_commands.get("active_power_setpoint")
+                if last_setpoint is not None and self.state.run_mode == 1:
+                    self.bess.set_power_command(float(last_setpoint))
 
     # -------------------------------------------------
     # Fault Logic

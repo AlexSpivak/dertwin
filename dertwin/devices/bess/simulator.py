@@ -21,6 +21,10 @@ class BESSSimulator(SimulatedDevice):
 
     def __init__(
             self,
+            capacity_kwh: float = 100.0,
+            initial_soc: float = 50.0,
+            max_charge_kw: float = 20.0,
+            max_discharge_kw: float = 20.0,
             ramp_rate_kw_per_s: float = 100.0,
             ambient_temp_c: float = 20.0,
             ambient_temp_model: Optional[AmbientTemperatureModel] = None,
@@ -29,16 +33,17 @@ class BESSSimulator(SimulatedDevice):
     ):
         super().__init__()
 
-        # --- Core models ---
         self.battery = BatteryModel(
-            capacity_kwh=100,
-            initial_soc=50,
+            capacity_kwh=capacity_kwh,
+            initial_soc=initial_soc,
+            max_charge_kw=max_charge_kw,
+            max_discharge_kw=max_discharge_kw,
             ambient_temp_c=ambient_temp_c,
         )
 
         self.inverter = InverterModel(
-            max_charge_kw=20.0,
-            max_discharge_kw=20.0,
+            max_charge_kw=max_charge_kw,
+            max_discharge_kw=max_discharge_kw,
             ramp_rate_kw_per_s=ramp_rate_kw_per_s,
         )
 
@@ -80,6 +85,7 @@ class BESSSimulator(SimulatedDevice):
     @max_charge_kw.setter
     def max_charge_kw(self, value):
         self.inverter.max_charge_kw = float(value)
+        self.battery.max_charge_kw = float(value)
 
     @property
     def max_discharge_kw(self):
@@ -88,6 +94,7 @@ class BESSSimulator(SimulatedDevice):
     @max_discharge_kw.setter
     def max_discharge_kw(self, value):
         self.inverter.max_discharge_kw = float(value)
+        self.battery.max_discharge_kw = float(value)
 
     @property
     def ramp_rate_kw_per_s(self):
@@ -172,17 +179,14 @@ class BESSSimulator(SimulatedDevice):
     # =========================================================
 
     def update(self, dt: float) -> None:
-        # Ambient temperature
         if self.ambient_temp_model:
             ambient = self.ambient_temp_model.get_temperature()
             self.battery.set_ambient_temperature(ambient)
 
-        # Grid frequency
         if self.grid_frequency_model:
             freq = self.grid_frequency_model.get_frequency()
             self.inverter.set_grid_frequency(freq)
 
-        # Grid voltage
         if self.grid_voltage_model:
             voltage = self.grid_voltage_model.get_voltage_ll()
             self.inverter.set_grid_voltage(voltage)

@@ -207,6 +207,9 @@ class BatteryModel:
             self.charge_energy_total_kwh + self.discharge_energy_total_kwh
         ) / (2.0 * self.capacity_kwh)
 
+        # SOH linear decay: 20% capacity loss over 4000 full cycles (0.005% per cycle)
+        self.soh = max(0.0, 100.0 - self.cycles * 0.005)
+
         self.update_temperature(power_kw, dt)
 
         return power_kw

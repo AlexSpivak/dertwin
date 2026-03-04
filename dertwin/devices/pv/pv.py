@@ -33,10 +33,10 @@ class PVModel:
     def get_telemetry(self):
         return PVTelemetry(
             inverter_status=1 if self.inverter.active_power_w > 10 else 0,
-            total_input_power=self.panel.dc_power_w(),
+            total_active_power=self.inverter.active_power_w / 1000.0,
+            total_input_power=self.panel.dc_power_w() / 1000.0,
             today_output_energy=self.today_energy_kwh,
             lifetime_output_energy=self.lifetime_energy_kwh,
-            total_active_power=self.inverter.active_power_w,
             grid_frequency=self.inverter.grid_frequency,
             phase_neutral_voltage_1=self.inverter.grid_voltage,
             phase_neutral_voltage_2=self.inverter.grid_voltage,

@@ -345,7 +345,7 @@ TEST_CONFIG_EXTERNAL = {
     "real_time": False,
     "register_map_root": "configs/register_maps",
 
-    # NEW PART — external models config
+    # external models config
     "external_models": {
 
         "power": {
