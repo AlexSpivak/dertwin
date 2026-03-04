@@ -1,0 +1,20 @@
+{
+  "site_name": "local-dev-site",
+  "step": 0.1,
+  "register_map_root": "configs/register_maps",
+  "assets": [
+    {
+      "type": "bess",
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "127.0.0.1",
+          "port": 55001,
+          "unit_id": 1,
+          "register_map": "bess_modbus.yaml"
+        }
+      ],
+      "capacity_kwh": 10
+    }
+  ]
+}
