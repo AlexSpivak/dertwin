@@ -62,8 +62,8 @@ class SimpleModbusClient:
             "commands":  [r for r in data.get("registers", []) if r.get("direction") == "write"],
         }
 
-    async def connect(self):
-        await self.client.connect()
+    async def connect(self) -> bool:
+        return await self.client.connect()
 
     async def read_by_name(self, name: str):
         entry = next(

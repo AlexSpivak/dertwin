@@ -29,7 +29,17 @@ class SimpleEMS:
         return "charge"
 
     async def run(self):
-        await self.client.connect()
+        print("[EMS] Connecting to BESS...")
+        for attempt in range(10):
+            connected = await self.client.connect()
+            if connected:
+                break
+            print(f"[EMS] Connection attempt {attempt + 1} failed — retrying in 2s")
+            await asyncio.sleep(2)
+        else:
+            print("[EMS] Could not connect to BESS after 10 attempts. Is the simulator running?")
+            return
+
         print("[EMS] Connected to BESS")
 
         self.mode = await self._read_initial_mode()

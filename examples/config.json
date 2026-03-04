@@ -3,7 +3,7 @@
   "assets": [
     {
       "type": "bess",
-      "host": "127.0.0.1",
+      "host": "localhost",
       "port": 55001,
       "unit_id": 1,
       "register_map": "../configs/register_maps/bess_modbus.yaml"
