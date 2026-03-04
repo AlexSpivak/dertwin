@@ -5,6 +5,7 @@
   "assets": [
     {
       "type": "bess",
+      "capacity_kwh": 10,
       "protocols": [
         {
           "kind": "modbus_tcp",
@@ -13,8 +14,7 @@
           "unit_id": 1,
           "register_map": "bess_modbus.yaml"
         }
-      ],
-      "capacity_kwh": 10
+      ]
     }
   ]
 }

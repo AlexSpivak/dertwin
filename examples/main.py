@@ -14,11 +14,14 @@ async def main():
 
     asset = config["assets"][0]
 
+    # Resolve register map path relative to config file location
+    register_map_path = (config_path.parent / asset["register_map"]).resolve()
+
     client = SimpleModbusClient(
         host=asset["host"],
         port=asset["port"],
         unit_id=asset["unit_id"],
-        register_map_path=asset["register_map"],
+        register_map_path=str(register_map_path),
     )
 
     ems = SimpleEMS(client, poll_interval=config.get("poll_interval", 2))

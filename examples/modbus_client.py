@@ -57,12 +57,9 @@ class SimpleModbusClient:
         with open(Path(path), "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
-        # Expect structure:
-        # telemetry: [...]
-        # commands: [...]
         return {
-            "telemetry": [item for item in data.get("registers", []) if item.get("direction") == "read"],
-            "commands": [item for item in data.get("registers", []) if item.get("direction") == "write"],
+            "telemetry": [r for r in data.get("registers", []) if r.get("direction") == "read"],
+            "commands":  [r for r in data.get("registers", []) if r.get("direction") == "write"],
         }
 
     async def connect(self):
@@ -76,14 +73,15 @@ class SimpleModbusClient:
         if not entry:
             raise ValueError(f"Telemetry register '{name}' not found")
 
-        address = entry["address"]
+        address   = entry["address"]
         data_type = entry.get("type", "uint16")
-        scale = float(entry.get("scale", 1.0))
-        count = 2 if data_type in ("uint32", "int32") else 1
+        scale     = float(entry.get("scale", 1.0))
+        # Use count from register map — do not infer from type
+        count     = int(entry.get("count", 1))
 
         result = await self.client.read_input_registers(
             address=address,
-            count=count
+            count=count,
         )
 
         if result.isError():
@@ -99,13 +97,22 @@ class SimpleModbusClient:
         if not entry:
             raise ValueError(f"Command register '{name}' not found")
 
-        address = entry["address"]
+        address   = entry["address"]
         data_type = entry.get("type", "uint16")
-        scale = float(entry.get("scale", 1.0))
+        scale     = float(entry.get("scale", 1.0))
+        func      = int(entry.get("func", 0x10))
 
         regs = encode_value(value, data_type, scale)
 
-        await self.client.write_registers(
-            address=address,
-            values=regs
-        )
+        if func == 0x06:
+            # Single-register write (FC06) — used for uint16 commands
+            await self.client.write_register(
+                address=address,
+                value=regs[0],
+            )
+        else:
+            # Multi-register write (FC16)
+            await self.client.write_registers(
+                address=address,
+                values=regs,
+            )
