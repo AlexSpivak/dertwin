@@ -197,6 +197,12 @@ The test suite covers device physics, register encoding, external models, and fu
 
 ---
 
+## 🤝 Contributing
+
+Contributions are welcome. Before diving in, read [`dertwin/README.md`](dertwin/README.md) — it covers the simulator architecture, how devices are modeled, the engine and clock design, and how to add new device types or protocols.
+
+---
+
 ## 📜 License
 
 MIT License
