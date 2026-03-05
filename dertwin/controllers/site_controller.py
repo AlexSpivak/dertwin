@@ -118,6 +118,12 @@ class SiteController:
             clock=self.clock,
             external_models=self.external_models,
         )
+        # Set simulation start time if specified (e.g. start_time_h: 12.0 for noon)
+        start_time_h = self.config.get("start_time_h", 0.0)
+        if start_time_h:
+            self.clock.time = start_time_h * 3600.0
+
+        self._built = True
 
         self._built = True
 

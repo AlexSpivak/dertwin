@@ -2,6 +2,7 @@
   "site_name": "full-site-demo",
   "step": 0.1,
   "real_time": true,
+  "start_time_h": 12.0,
   "register_map_root": "configs/register_maps",
 
   "external_models": {
