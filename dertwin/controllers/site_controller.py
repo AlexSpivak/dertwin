@@ -66,7 +66,7 @@ class SiteController:
             devices.append(device)
             devices_by_type.setdefault(asset["type"], []).append(device)
 
-        self.external_models.power_model = ExternalModels.build_power_model(devices_by_type, self.config.get("power_model"))
+        self.external_models.power_model = ExternalModels.build_power_model(devices_by_type, self.config.get("external_models"))
 
 
         # ------------------------------------------------------

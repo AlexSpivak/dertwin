@@ -47,8 +47,8 @@ async def main():
             unit = BESSUnit(
                 client=client,
                 name=name,
-                max_charge_kw=asset.get("max_charge_kw", 50.0),
-                max_discharge_kw=asset.get("max_discharge_kw", 50.0),
+                charge_kw=asset.get("max_charge_kw", 50.0),
+                discharge_kw=asset.get("max_discharge_kw", 50.0),
             )
             bess_units.append(unit)
 

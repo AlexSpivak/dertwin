@@ -86,7 +86,7 @@ class ExternalModels:
                 for p in pv_devices
             ),
             bess_supplier=lambda: sum(
-                b.get_telemetry().active_power * 1000.0
+                b.get_telemetry().active_power
                 for b in bess_devices
             ),
         )
