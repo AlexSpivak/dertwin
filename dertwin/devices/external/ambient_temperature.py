@@ -22,6 +22,12 @@ class AmbientTemperatureModel:
         if amplitude_c < 0:
             raise ValueError("amplitude_c must be non-negative")
 
+        if peak_hour < 0:
+            raise ValueError("peak_hour must be non-negative")
+
+        if peak_hour > 24:
+            raise ValueError("peak_hour must be less than 24")
+
         self.mean = mean_temp_c
         self.amplitude = amplitude_c
         self.peak_hour = peak_hour % 24.0

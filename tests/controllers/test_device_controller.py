@@ -43,14 +43,8 @@ BESS_MAP = RegisterMap(BESS_REGISTERS)
 def test_controller_forwards_commands_to_bess():
     bess = BESSSimulator(ramp_rate_kw_per_s=5.0)
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    controller = DeviceController(device=bess, protocols=[modbus], register_map=BESS_MAP)
 
-    controller = DeviceController(
-        device=bess,
-        protocols=[modbus],
-        register_map=BESS_MAP,
-    )
-
-    # init step
     controller.step(dt=0.1)
     controller.write_protocol_commands({"start_stop_standby": 1})
     controller.step(dt=0.1)
@@ -61,18 +55,10 @@ def test_controller_forwards_commands_to_bess():
 def test_controller_bess_ramp_flow():
     bess = BESSSimulator(ramp_rate_kw_per_s=5.0)
     bess.max_discharge_kw = 50
-
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    controller = DeviceController(device=bess, protocols=[modbus], register_map=BESS_MAP)
 
-    controller = DeviceController(
-        device=bess,
-        protocols=[modbus],
-        register_map=BESS_MAP,
-    )
-
-    # init step
     controller.step(dt=0.1)
-    # Start the device
     controller.write_protocol_commands({"start_stop_standby": 1})
     controller.write_protocol_commands({"on_grid_power_setpoint": 50.0})
 
@@ -85,21 +71,12 @@ def test_controller_bess_ramp_flow():
 def test_controller_bess_applies_only_on_change():
     bess = BESSSimulator()
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    controller = DeviceController(device=bess, protocols=[modbus], register_map=BESS_MAP)
 
-    controller = DeviceController(
-        device=bess,
-        protocols=[modbus],
-        register_map=BESS_MAP,
-    )
-
-    # init step
     controller.step(dt=0.1)
-
-    # Start the device
     controller.write_protocol_commands({"start_stop_standby": 1})
     controller.write_protocol_commands({"on_grid_power_setpoint": 10})
     controller.step(dt=0.1)
-
     assert bess.commanded_power_kw == 10
 
     controller.step(dt=0.1)
@@ -107,7 +84,6 @@ def test_controller_bess_applies_only_on_change():
 
     controller.write_protocol_commands({"on_grid_power_setpoint": 20})
     controller.step(dt=0.1)
-
     assert bess.commanded_power_kw == 20
 
 
@@ -117,49 +93,28 @@ def test_controller_bess_applies_only_on_change():
 
 def test_controller_updates_inverter_power():
     pv = PVSimulator(rated_kw=10.0)
-
-    # realistic irradiance
     pv.set_irradiance(1000.0)
-
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
-
-    controller = DeviceController(
-        device=pv,
-        protocols=[modbus],
-        register_map=RegisterMap([]),
-    )
+    controller = DeviceController(device=pv, protocols=[modbus], register_map=RegisterMap([]))
 
     controller.step(dt=1.0)
 
     telemetry = pv.get_telemetry()
+    rated_kw = pv.rated_power_w / 1000.0  # rated_power_w is W; telemetry is kW
 
-    # We verify:
-    #   - power is positive
-    #   - does not exceed rated AC power
     assert telemetry.total_active_power > 0.0
-    assert telemetry.total_active_power <= pv.rated_power_w
+    assert telemetry.total_active_power <= rated_kw
 
 
 def test_controller_inverter_energy_accumulates():
     pv = PVSimulator(rated_kw=10.0)
-
     pv.set_irradiance(1000.0)
-
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
-
-    controller = DeviceController(
-        device=pv,
-        protocols=[modbus],
-        register_map=RegisterMap([]),
-    )
+    controller = DeviceController(device=pv, protocols=[modbus], register_map=RegisterMap([]))
 
     for _ in range(3600):
         controller.step(dt=1.0)
 
-    # PV includes:
-    #   - panel temperature derating
-    #   - inverter efficiency
-    #   - possible clipping
     assert pv.today_energy_kwh > 0.0
     assert pv.today_energy_kwh <= 10.0
 
@@ -168,65 +123,47 @@ def test_controller_inverter_energy_accumulates():
 # ENERGY METER CONTROLLER TESTS
 # ============================================================
 
-def create_meter(load_kw, pv_w=0.0, bess_w=0.0):
+def create_meter(load_kw, pv_kw=0.0, bess_kw=0.0):
+    """All suppliers in kW — SitePowerModel no longer divides internally."""
     power_model = SitePowerModel(
         base_load_supplier=lambda t: load_kw,
-        pv_supplier=lambda: pv_w,
-        bess_supplier=lambda: bess_w,
+        pv_supplier=lambda: pv_kw,
+        bess_supplier=lambda: bess_kw,
     )
-
     grid_model = GridFrequencyModel(seed=1)
     voltage_model = GridVoltageModel(seed=1)
-
     meter = EnergyMeterSimulator(
         power_model=power_model,
         grid_model=grid_model,
         grid_voltage_model=voltage_model,
         seed=1,
     )
-
     return meter, power_model
 
 
 def test_controller_updates_energy_meter_import():
     meter, power_model = create_meter(load_kw=10.0)
-
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
-
-    controller = DeviceController(
-        device=meter,
-        protocols=[modbus],
-        register_map=RegisterMap([]),
-    )
+    controller = DeviceController(device=meter, protocols=[modbus], register_map=RegisterMap([]))
 
     power_model.update(dt=3600)
-
-    controller.step(dt=3600)  # 1 hour
+    controller.step(dt=3600)
 
     telemetry = meter.get_telemetry()
-
     assert telemetry.total_active_power == 10.0
     assert pytest.approx(telemetry.total_import_energy, 0.001) == 10.0
     assert telemetry.total_export_energy == 0.0
 
 
 def test_controller_updates_energy_meter_export():
-    meter, power_model = create_meter(load_kw=5.0, pv_w=15000.0)
-
+    meter, power_model = create_meter(load_kw=5.0, pv_kw=15.0)  # kW, not watts
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
-
-    controller = DeviceController(
-        device=meter,
-        protocols=[modbus],
-        register_map=RegisterMap([]),
-    )
+    controller = DeviceController(device=meter, protocols=[modbus], register_map=RegisterMap([]))
 
     power_model.update(dt=3600)
-
     controller.step(dt=3600)
 
     telemetry = meter.get_telemetry()
-
     assert telemetry.total_active_power == -10.0
     assert pytest.approx(telemetry.total_export_energy, 0.001) == 10.0
     assert telemetry.total_import_energy == 0.0
@@ -234,19 +171,11 @@ def test_controller_updates_energy_meter_export():
 
 def test_controller_meter_is_passive_to_commands():
     meter, power_model = create_meter(load_kw=5.0)
-
     modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    controller = DeviceController(device=meter, protocols=[modbus], register_map=RegisterMap([]))
 
-    controller = DeviceController(
-        device=meter,
-        protocols=[modbus],
-        register_map=RegisterMap([]),
-    )
     power_model.update(dt=3600)
-
     controller.write_protocol_commands({"some_random_command": 123})
     controller.step(dt=1.0)
 
-    # Meter ignores commands — still behaves normally
-    telemetry = meter.get_telemetry()
-    assert telemetry.total_active_power == 5.0
+    assert meter.get_telemetry().total_active_power == 5.0

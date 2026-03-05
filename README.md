@@ -2,142 +2,213 @@
 
 Digital Twin infrastructure for modern energy systems.
 
-**DER Twin** is a lightweight Digital Twin simulator for Distributed Energy Resources (DER), designed for protocol testing, integration validation, and control algorithm development.  
-It simulates energy devices (BESS, PV inverters, grid frequency, energy meters, etc.) and exposes them via industrial protocols like Modbus TCP.
-
-Designed for engineers and researchers building and validating modern energy control systems.
+**DER Twin** is a lightweight simulator for Distributed Energy Resources (DER) — BESS, PV inverters, energy meters, and grid models — exposed via Modbus TCP. Use it for EMS development, protocol testing, integration validation, and control algorithm sandboxing without touching real hardware.
 
 ---
 
-## 🚀 Why DER Twin?
+## ⚡ Quickstart
 
-Modern energy systems require:
+### Option A — Run locally
 
-- Realistic device simulations
-- Protocol-level validation
-- Fast integration testing
-- Control algorithm sandboxing
+```bash
+git clone https://github.com/AlexSpivak/dertwin.git
+cd dertwin
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+python -m dertwin.main -c configs/simple_config.json
+```
 
-DER Twin allows you to run multiple simulated devices locally and interact with them as if they were real hardware.
+You should see:
+```
+2026-03-05 12:00:00 | INFO | dertwin.controllers.site_controller | Building site: local-dev-site
+2026-03-05 12:00:00 | INFO | dertwin.protocol.modbus | Starting Modbus server | 0.0.0.0:55001 | unit=1
+2026-03-05 12:00:00 | INFO | dertwin.core.engine | Simulation engine started | step=0.100s
+```
+
+The simulator is now accepting Modbus TCP connections on port `55001`.
+
+### Option B — Run with Docker
+
+```bash
+git clone https://github.com/AlexSpivak/dertwin.git
+cd dertwin
+python generate_compose.py configs/simple_config.json
+docker compose up --build
+```
+
+`generate_compose.py` reads the config and generates a `docker-compose.yml` with the correct ports automatically. No manual port configuration needed.
+
+---
+
+## 🔌 Connect an EMS
+
+With the simulator running, start the example EMS from a second terminal:
+
+```bash
+cd examples
+python main_simple.py
+```
+
+You'll see the EMS connecting over Modbus and cycling the BESS between 40–60% SOC:
+
+```
+[EMS] Connected to BESS
+[EMS] Starting in CHARGE mode
+[EMS] STATUS=1 | SOC= 42.30% | P=  -20.00 kW | MODE=charge
+[EMS] STATUS=1 | SOC= 44.10% | P=  -20.00 kW | MODE=charge
+...
+[EMS] Reached 60% → switching to DISCHARGE
+```
+
+For a full multi-device site (dual BESS + PV + energy meter + external models):
+
+```bash
+python -m dertwin.main -c configs/full_site_config.json
+# in another terminal:
+python examples/main_full.py
+```
 
 ---
 
 ## 🧱 Features
 
-- Async Modbus TCP server (built on `pymodbus`)
-- Config-driven register mapping
-- High-frequency device simulation loop
-- Command handling via holding registers
-- Centralized structured logging
-- Multi-device support across multiple ports
-- Deterministic simulation for reproducible results
+- Async Modbus TCP server built on `pymodbus`
+- Config-driven site topology — add devices by editing JSON
+- Irradiance, ambient temperature, grid frequency, and grid voltage models
+- Multi-device support across independent ports
+- External model events (voltage sags, frequency deviations)
+- Simulation start time control (`start_time_h`) — start at noon, peak load, etc.
+- Docker support with auto-generated Compose files
+- Deterministic simulation with seeded random models
+- Fully tested with `pytest`
 
 ---
 
 ## 📦 Repo Structure
-```markdown
-configs/ # JSON/YAML site configurations + register maps
-dertwin/ # Core simulator packages and modules
-README.md # Package-level documentation
-core/ # Clock, engine, device abstractions, register maps
-controllers/ # Device and site orchestration
-devices/ # Device simulation models: BESS, PV, Energy Meter, External world
-telemetry/ # Telemetry definitions and helpers
-protocol/ # Modbus TCP server implementation
-main.py # Simulator entry point
-logging_config.py # Centralized logging setup
-tests/ # Unit tests for all packages
-examples/ # (planned) EMS-in-the-loop examples
-.gitignore
-LICENSE
-pyproject.toml
-README.md
+
 ```
-
-For detailed architecture, design, and per-package usage, see [`dertwin/README.md`](dertwin/README.md).
-
----
-
-## 🛠 Installation
-
-```bash
-git clone https://github.com/<your-username>/dertwin.git
-cd dertwin
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
----
-## ▶️ Running the Simulator
-```bash
-python -m dertwin.main -c configs/demo_config.json
-```
-You should see logs like:
-```markdown
-2026-03-02 14:42:03 | INFO     | dertwin.logging_config | Logging initialized | level=INFO
-2026-03-02 14:42:03 | INFO     | dertwin.controllers.site_controller | Building site: local-dev-site
-2026-03-02 14:42:03 | INFO     | dertwin.controllers.site_controller | Starting site runtime
-2026-03-02 14:42:03 | INFO     | dertwin.protocol.modbus | Starting Modbus server | 127.0.0.1:55001 | unit=1
+dertwin/
+├── configs/
+│   ├── register_maps/       # Modbus register definitions (YAML)
+│   ├── simple_config.json   # Single BESS — good starting point
+│   ├── demo_config.json     # Full three-device site
+│   └── full_site_config.json# Dual BESS + PV + meter + external models
+├── dertwin/
+│   ├── core/                # Clock, engine, register map loader
+│   ├── controllers/         # Site and device orchestration
+│   ├── devices/             # BESS, PV, energy meter, external models
+│   ├── protocol/            # Modbus TCP server
+│   └── telemetry/           # Telemetry dataclasses
+├── examples/
+│   ├── simple/              # Single BESS EMS example
+│   ├── full/                # Multi-device EMS example
+│   └── protocol/            # Shared Modbus client
+├── tests/                   # Full test suite
+├── generate_compose.py      # Docker Compose generator
+├── Dockerfile
+└── main.py
 ```
 
 ---
+
 ## ⚙️ Configuration
 
-Device register mappings are config-driven.
-Each register definition includes:
+Sites are defined in JSON. Each asset declares its type, parameters, and Modbus protocol binding:
 
-- name
-- internal_name
-- address
-- type (uint16, int16, uint32, int32)
-- scale
-- count
-- function code (0x03 read, 0x04 input read, etc.)
-- Optional unit and description
+```json
+{
+  "site_name": "my-site",
+  "step": 0.1,
+  "real_time": true,
+  "start_time_h": 12.0,
+  "register_map_root": "configs/register_maps",
+  "external_models": {
+    "irradiance": { "peak": 1000.0, "sunrise": 6.0, "sunset": 18.0 },
+    "grid_frequency": { "nominal_hz": 50.0, "noise_std": 0.002, "seed": 42 }
+  },
+  "assets": [
+    {
+      "type": "bess",
+      "capacity_kwh": 100.0,
+      "initial_soc": 60.0,
+      "protocols": [{ "kind": "modbus_tcp", "ip": "0.0.0.0", "port": 55001, "unit_id": 1, "register_map": "bess_modbus.yaml" }]
+    }
+  ]
+}
+```
 
-Example:
-```markdown
-# System Info
-- address: 32000
-  name: service_voltage
-  internal_name: service_voltage
-  func: 0x04
-  type: uint16
-  count: 1
-  scale: 0.1
-  unit: V
+**`real_time: true`** — engine runs its own loop, use for `main.py` and EMS examples  
+**`real_time: false`** — caller drives the clock via `step_once()`, use for tests  
+**`start_time_h`** — sets simulation clock on startup (e.g. `12.0` for noon). All external models start from this time.  
+**`ip: "0.0.0.0"`** — required when running inside Docker so port mapping works. Use `127.0.0.1` for local-only.
+
+Register map fields: `name`, `address`, `type` (uint16/int16/uint32/int32), `scale`, `count`, `func` (0x03/0x04/0x06/0x10).
+
+For detailed architecture and per-package docs, see [`dertwin/README.md`](dertwin/README.md).
+
+---
+
+## 🐳 Docker
+
+```bash
+# Generate docker-compose.yml from any config
+python generate_compose.py configs/full_site_config.json
+
+# Ports are read automatically from the config — no manual editing
+docker compose up --build
+
+# Override config at runtime without rebuilding
+docker run \
+  -v /path/to/my/configs:/app/configs:ro \
+  -e CONFIG_PATH=/app/configs/my_site.json \
+  -p 55001:55001 \
+  dertwin-simulator
 ```
 
 ---
-## 🧪 Running Tests
+
+## 🧪 Tests
+
 ```bash
 pytest
 ```
-All packages are fully tested under /tests/.
 
---- 
-
-## 📈 Roadmap (v1)
-- Scenario engine (event-driven simulation)
-- REST API & Web dashboard
-- Dockerized simulator image
-- IEC 61850 integration (future)
-- MQTT integration
-- EMS-in-the-loop examples (/examples/)
+The test suite covers device physics, register encoding, external models, and full end-to-end site integration via Modbus TCP. See `tests/` for structure.
 
 ---
+
+## 📈 Roadmap
+
+- [ ] Scenario engine — scripted event sequences
+- [ ] REST API + web dashboard
+- [ ] IEC 61850 support
+- [ ] MQTT integration
+- [ ] Published PyPI package
+
+---
+
 ## 🧠 Use Cases
 
-- SCADA integration testing
-- EMS algorithm validation
+- EMS algorithm development and validation
+- SCADA/HMI integration testing
+- Protocol compliance testing
 - DER fleet orchestration prototyping
-- Frequency response simulations
-- Protocol compliance and conformance testing
+- Frequency and voltage response simulation
 
 ---
+
+## 🤝 Contributing
+
+Contributions are welcome. Before diving in, read [`dertwin/README.md`](dertwin/README.md) — it covers the simulator architecture, how devices are modeled, the engine and clock design, and how to add new device types or protocols.
+
+---
+
 ## 📜 License
+
 MIT License
 
 ---
+
 ## 👤 Author
+
 Oleksandr Spivak

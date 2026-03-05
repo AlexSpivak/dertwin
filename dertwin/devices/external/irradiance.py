@@ -26,6 +26,8 @@ class IrradianceModel:
         self.sunrise = sunrise_hour
         self.sunset = sunset_hour
 
+        if peak_irradiance_w_m2 < 0:
+            raise ValueError("peak_irradiance_w_m2 must be positive")
         self._irradiance = 0.0
 
     # --------------------------------------------------

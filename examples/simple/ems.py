@@ -1,0 +1,85 @@
+import asyncio
+
+
+class SimpleEMS:
+    def __init__(self, client, poll_interval=2):
+        self.client = client
+        self.poll_interval = poll_interval
+        self.mode = None        # set after reading initial SOC
+        self._starting = False  # guard against repeated start commands
+
+    async def _enable_bess(self):
+        if self._starting:
+            return
+        self._starting = True
+        print("[EMS] Enabling BESS")
+        await self.client.write_by_name("start_stop_standby", 1)
+        await asyncio.sleep(1)
+
+    async def _read_initial_mode(self) -> str:
+        """Set initial charge/discharge mode based on current SOC."""
+        soc = await self.client.read_by_name("system_soc")
+        if soc is None:
+            return "charge"
+        if soc >= 60:
+            return "discharge"
+        if soc <= 40:
+            return "charge"
+        # Mid-range: default to charge
+        return "charge"
+
+    async def run(self):
+        print("[EMS] Connecting to BESS...")
+        for attempt in range(10):
+            connected = await self.client.connect()
+            if connected:
+                break
+            print(f"[EMS] Connection attempt {attempt + 1} failed — retrying in 2s")
+            await asyncio.sleep(2)
+        else:
+            print("[EMS] Could not connect to BESS after 10 attempts. Is the simulator running?")
+            return
+
+        print("[EMS] Connected to BESS")
+
+        self.mode = await self._read_initial_mode()
+        print(f"[EMS] Initial SOC read — starting in {self.mode.upper()} mode")
+
+        while True:
+            try:
+                soc    = await self.client.read_by_name("system_soc")
+                power  = await self.client.read_by_name("active_power")
+                status = await self.client.read_by_name("working_status")
+
+                print(
+                    f"[EMS] STATUS={status} | "
+                    f"SOC={soc:6.2f}% | "
+                    f"P={power:7.2f} kW | "
+                    f"MODE={self.mode}"
+                )
+
+                if status != 1:
+                    await self._enable_bess()
+                    await asyncio.sleep(self.poll_interval)
+                    continue
+
+                # BESS is running — clear starting flag
+                self._starting = False
+
+                # ---- Oscillation logic ----
+                if self.mode == "charge":
+                    await self.client.write_by_name("on_grid_power_setpoint", -20.0)
+                    if soc >= 60:
+                        print("[EMS] Reached 60% → switching to DISCHARGE")
+                        self.mode = "discharge"
+
+                elif self.mode == "discharge":
+                    await self.client.write_by_name("on_grid_power_setpoint", 20.0)
+                    if soc <= 40:
+                        print("[EMS] Reached 40% → switching to CHARGE")
+                        self.mode = "charge"
+
+            except Exception as e:
+                print(f"[EMS] Error: {e}")
+
+            await asyncio.sleep(self.poll_interval)

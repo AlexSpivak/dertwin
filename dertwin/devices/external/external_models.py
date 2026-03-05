@@ -70,11 +70,13 @@ class ExternalModels:
 
     @staticmethod
     def build_power_model(devices_by_type, config = None):
-        base_load = 5.0 # default base load
+        base_load = 5.0
         if config:
             base_load = config.get("power", {}).get("base_load_w")
             if base_load:
-                base_load = float(base_load) / 1000  # kW
+                base_load = float(base_load) / 1000.0
+            else:
+                base_load = 5.0  # default 5 kW
 
         bess_devices = devices_by_type.get("bess", [])
         pv_devices = devices_by_type.get("inverter", [])
@@ -86,7 +88,7 @@ class ExternalModels:
                 for p in pv_devices
             ),
             bess_supplier=lambda: sum(
-                b.get_telemetry().active_power * 1000.0
+                b.get_telemetry().active_power
                 for b in bess_devices
             ),
         )
