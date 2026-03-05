@@ -142,7 +142,23 @@ Sites are defined in JSON. Each asset declares its type, parameters, and Modbus 
 **`start_time_h`** — sets simulation clock on startup (e.g. `12.0` for noon). All external models start from this time.  
 **`ip: "0.0.0.0"`** — required when running inside Docker so port mapping works. Use `127.0.0.1` for local-only.
 
-Register map fields: `name`, `address`, `type` (uint16/int16/uint32/int32), `scale`, `count`, `func` (0x03/0x04/0x06/0x10).
+**Register map fields:**
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Human-readable label, used in logs and the EMS client |
+| `internal_name` | yes | Maps to the device's internal telemetry or command field — must match the attribute name in the corresponding telemetry class (see [`dertwin/telemetry/README.md`](dertwin/telemetry/README.md)) |
+| `address` | yes | Modbus register address |
+| `type` | yes | `uint16`, `int16`, `uint32`, `int32` |
+| `scale` | yes | Multiplier applied on read, divisor applied on write |
+| `count` | yes | Number of registers (1 for 16-bit, 2 for 32-bit) |
+| `func` | yes | Function code: `0x04` input read, `0x03` holding read, `0x06` single write, `0x10` multi-register write |
+| `direction` | yes | `read` or `write` |
+| `unit` | no | Physical unit label (V, kW, Hz, etc.) |
+| `description` | no | Free-text note |
+| `options` | no | Enum mapping for status/mode registers |
+
+`name` and `internal_name` can differ — `name` is what the EMS client sees, `internal_name` is what the device simulator uses internally. For example, `on_grid_power_setpoint` (name) maps to `active_power_setpoint` (internal_name) on the BESS device.
 
 For detailed architecture and per-package docs, see [`dertwin/README.md`](dertwin/README.md).
 
@@ -194,12 +210,6 @@ The test suite covers device physics, register encoding, external models, and fu
 - Protocol compliance testing
 - DER fleet orchestration prototyping
 - Frequency and voltage response simulation
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome. Before diving in, read [`dertwin/README.md`](dertwin/README.md) — it covers the simulator architecture, how devices are modeled, the engine and clock design, and how to add new device types or protocols.
 
 ---
 
