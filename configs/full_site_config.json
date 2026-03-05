@@ -1,0 +1,100 @@
+{
+  "site_name": "full-site-demo",
+  "step": 0.1,
+  "real_time": true,
+  "register_map_root": "configs/register_maps",
+
+  "external_models": {
+    "power": {
+      "base_load_w": 15000.0
+    },
+    "irradiance": {
+      "peak": 1000.0,
+      "sunrise": 6.0,
+      "sunset": 18.0
+    },
+    "ambient_temperature": {
+      "mean": 25.0,
+      "amplitude": 10.0,
+      "peak_hour": 15.0
+    },
+    "grid_frequency": {
+      "nominal_hz": 50.0,
+      "noise_std": 0.002,
+      "drift_std": 0.0002,
+      "seed": 42
+    },
+    "grid_voltage": {
+      "nominal_v_ll": 400.0,
+      "noise_std": 0.5,
+      "drift_std": 0.05,
+      "seed": 42
+    }
+  },
+
+  "assets": [
+    {
+      "comment": "BESS unit 1 — primary storage, 100 kWh, starts at 60% SOC",
+      "type": "bess",
+      "capacity_kwh": 100.0,
+      "initial_soc": 60.0,
+      "max_charge_kw": 50.0,
+      "max_discharge_kw": 50.0,
+      "ramp_rate_kw_per_s": 10.0,
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55001,
+          "unit_id": 1,
+          "register_map": "bess_modbus.yaml"
+        }
+      ]
+    },
+    {
+      "comment": "BESS unit 2 — secondary storage, 50 kWh, starts at 40% SOC",
+      "type": "bess",
+      "capacity_kwh": 50.0,
+      "initial_soc": 40.0,
+      "max_charge_kw": 25.0,
+      "max_discharge_kw": 25.0,
+      "ramp_rate_kw_per_s": 5.0,
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55002,
+          "unit_id": 1,
+          "register_map": "bess_modbus.yaml"
+        }
+      ]
+    },
+    {
+      "comment": "PV inverter — 30 kW rated, driven by irradiance model",
+      "type": "inverter",
+      "rated_kw": 30.0,
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55003,
+          "unit_id": 1,
+          "register_map": "pv_inverter_modbus.yaml"
+        }
+      ]
+    },
+    {
+      "comment": "Site energy meter — aggregates all power flows",
+      "type": "energy_meter",
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55004,
+          "unit_id": 1,
+          "register_map": "energy_meter_modbus.yaml"
+        }
+      ]
+    }
+  ]
+}

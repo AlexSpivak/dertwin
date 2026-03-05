@@ -1,0 +1,39 @@
+{
+  "poll_interval": 2,
+  "assets": [
+    {
+      "type": "bess",
+      "name": "BESS-1",
+      "host": "localhost",
+      "port": 55001,
+      "unit_id": 1,
+      "max_charge_kw": 50.0,
+      "max_discharge_kw": 50.0,
+      "register_map": "configs/register_maps/bess_modbus.yaml"
+    },
+    {
+      "type": "bess",
+      "name": "BESS-2",
+      "host": "localhost",
+      "port": 55002,
+      "unit_id": 1,
+      "max_charge_kw": 25.0,
+      "max_discharge_kw": 25.0,
+      "register_map": "configs/register_maps/bess_modbus.yaml"
+    },
+    {
+      "type": "inverter",
+      "host": "localhost",
+      "port": 55003,
+      "unit_id": 1,
+      "register_map": "configs/register_maps/pv_inverter_modbus.yaml"
+    },
+    {
+      "type": "energy_meter",
+      "host": "localhost",
+      "port": 55004,
+      "unit_id": 1,
+      "register_map": "configs/register_maps/energy_meter_modbus.yaml"
+    }
+  ]
+}
