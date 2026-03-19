@@ -4,20 +4,44 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dertwin"
-version = "0.0.1"
-description = "DER device simulator with Modbus interface"
-requires-python = ">=3.10"
+version = "0.1.0"
+description = "Digital twin simulator for distributed energy resources — BESS, PV inverters, energy meters"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Oleksandr Spivak", email = "oleksdertwin@gmail.com" }]
+requires-python = ">=3.11"
+keywords = ["modbus", "digital-twin", "bess", "energy", "ems", "der", "simulator"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Testing",
+]
 
 dependencies = [
     "pymodbus>=3.5,<4.0",
-    "PyYAML>=6.0"
+    "PyYAML>=6.0",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
+[project.urls]
+Homepage = "https://github.com/AlexSpivak/dertwin"
+Repository = "https://github.com/AlexSpivak/dertwin"
+"Bug Tracker" = "https://github.com/AlexSpivak/dertwin/issues"
+
+[project.scripts]
+dertwin = "dertwin.main:main"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
-    "pytest-asyncio>=0.21"
+    "pytest-asyncio>=0.21",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["tests*", "examples*"]
