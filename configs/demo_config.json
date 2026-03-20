@@ -1,7 +1,7 @@
 {
   "site_name": "local-dev-site",
   "step": 0.1,
-  "register_map_root": "configs/register_maps",
+  "register_map_root": "register_maps",
   "assets": [
     {
       "type": "bess",

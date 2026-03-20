@@ -19,7 +19,7 @@ def load_config(path: Path) -> dict:
     if "register_map_root" in config:
         register_map_root = Path(config["register_map_root"])
         if not register_map_root.is_absolute():
-            register_map_root = Path.cwd() / register_map_root
+            register_map_root = path.parent / register_map_root
         config["register_map_root"] = str(register_map_root.resolve())
 
     return config
