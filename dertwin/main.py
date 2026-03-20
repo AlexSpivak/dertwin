@@ -7,20 +7,19 @@ from dertwin.controllers.site_controller import SiteController
 from dertwin.logging_config import setup_logging
 
 setup_logging("INFO")
-ROOT = Path(__file__).resolve().parent.parent
 
 def load_config(path: Path) -> dict:
     if not path.is_absolute():
-        path = ROOT / path
+        path = Path.cwd() / path
 
     with open(path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    # resolve register_map_root relative to config file
+    # register_map_root resolves relative to cwd, not config file
     if "register_map_root" in config:
         register_map_root = Path(config["register_map_root"])
         if not register_map_root.is_absolute():
-            register_map_root = ROOT / register_map_root
+            register_map_root = Path.cwd() / register_map_root
         config["register_map_root"] = str(register_map_root.resolve())
 
     return config
