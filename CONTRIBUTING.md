@@ -26,7 +26,7 @@ Open an issue describing the use case, not just the feature. "I need voltage sag
 
 ### Submitting Code
 
-1. Fork the repo and create a branch from `master`
+1. Fork the repo and create a branch from `main`
 2. Make your changes
 3. Add or update tests — PRs without tests will be asked to add them
 4. Run the full test suite and make sure everything passes
@@ -81,6 +81,30 @@ If a PR mixes these concerns it will be asked to refactor.
 - No external formatter enforced yet, but follow the existing style — snake_case, type hints on public methods, docstrings on classes
 - Keep physics logic out of controllers and protocols
 - Prefer explicit over clever
+
+---
+
+## Releasing
+
+For maintainers. The release flow:
+
+```bash
+# 1. Bump version in pyproject.toml
+# 2. Commit the bump
+git add pyproject.toml
+git commit -m "bump version to 0.x.x"
+
+# 3. Tag and push
+git tag v0.x.x
+git push origin main
+git push origin v0.x.x
+
+# 4. Build and publish to PyPI
+python -m build
+twine upload dist/*
+
+# 5. Create a GitHub release from the tag with a short changelog
+```
 
 ---
 
