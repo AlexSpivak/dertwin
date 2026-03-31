@@ -14,7 +14,7 @@ from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
 
 from dertwin.devices.external.external_models import ExternalModels
 
-from dertwin.protocol.modbus import ModbusSimulator
+from dertwin.protocol.modbus import ModbusTCPSimulator, ModbusRTUSimulator
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class SiteController:
 
         self.engine: Optional[SimulationEngine] = None
         self.controllers: List[DeviceController] = []
-        self.protocols: List[ModbusSimulator] = []
+        self.protocols: List = []
 
         self._tasks: List[asyncio.Task] = []
         self._built = False
@@ -88,26 +88,19 @@ class SiteController:
 
             for proto_cfg in asset.get("protocols", []):
 
-                if proto_cfg["kind"] != "modbus_tcp":
-                    raise ValueError(f"Unsupported protocol kind: {proto_cfg['kind']}")
-
                 map_path = Path(proto_cfg["register_map"])
                 if not map_path.is_absolute():
                     map_path = self.register_map_root / map_path
 
                 register_map = RegisterMap.from_yaml(map_path)
 
-                modbus = ModbusSimulator(
-                    address=proto_cfg["ip"],
-                    port=proto_cfg["port"],
-                    unit_id=proto_cfg.get("unit_id", 1),
-                )
+                protocol = self._create_protocol(proto_cfg)
 
-                self.protocols.append(modbus)
+                self.protocols.append(protocol)
 
                 controller = DeviceController(
                     device=device,
-                    protocols=[modbus],
+                    protocols=[protocol],
                     register_map=register_map,
                 )
 
@@ -122,8 +115,6 @@ class SiteController:
         start_time_h = self.config.get("start_time_h", 0.0)
         if start_time_h:
             self.clock.time = start_time_h * 3600.0
-
-        self._built = True
 
         self._built = True
 
@@ -176,6 +167,31 @@ class SiteController:
         self._running = False
 
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _create_protocol(proto_cfg: Dict):
+        """Instantiate a protocol server from a protocol config block."""
+        kind = proto_cfg["kind"]
+
+        if kind == "modbus_tcp":
+            return ModbusTCPSimulator(
+                address=proto_cfg["ip"],
+                port=proto_cfg["port"],
+                unit_id=proto_cfg.get("unit_id", 1),
+            )
+
+        if kind == "modbus_rtu":
+            return ModbusRTUSimulator(
+                port=proto_cfg["port"],
+                unit_id=proto_cfg.get("unit_id", 1),
+                baudrate=proto_cfg.get("baudrate", 9600),
+                bytesize=proto_cfg.get("bytesize", 8),
+                parity=proto_cfg.get("parity", "N"),
+                stopbits=proto_cfg.get("stopbits", 1),
+                timeout=proto_cfg.get("timeout", 1.0),
+            )
+
+        raise ValueError(f"Unsupported protocol kind: {kind}")
 
     def _create_device(self, asset_cfg: Dict):
         dtype = asset_cfg["type"]
