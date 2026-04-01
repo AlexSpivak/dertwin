@@ -8,7 +8,7 @@ from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.pv.simulator import PVSimulator
 from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
 from dertwin.devices.external.grid_frequency import GridFrequencyModel
-from dertwin.protocol.modbus import ModbusSimulator
+from dertwin.protocol.modbus import ModbusTCPSimulator
 
 
 # ============================================================
@@ -42,7 +42,7 @@ BESS_MAP = RegisterMap(BESS_REGISTERS)
 
 def test_controller_forwards_commands_to_bess():
     bess = BESSSimulator(ramp_rate_kw_per_s=5.0)
-    modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    modbus = ModbusTCPSimulator(address="0.0.0.0", port=5021, unit_id=1)
     controller = DeviceController(device=bess, protocols=[modbus], register_map=BESS_MAP)
 
     controller.step(dt=0.1)
@@ -55,7 +55,7 @@ def test_controller_forwards_commands_to_bess():
 def test_controller_bess_ramp_flow():
     bess = BESSSimulator(ramp_rate_kw_per_s=5.0)
     bess.max_discharge_kw = 50
-    modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    modbus = ModbusTCPSimulator(address="0.0.0.0", port=5021, unit_id=1)
     controller = DeviceController(device=bess, protocols=[modbus], register_map=BESS_MAP)
 
     controller.step(dt=0.1)
@@ -70,7 +70,7 @@ def test_controller_bess_ramp_flow():
 
 def test_controller_bess_applies_only_on_change():
     bess = BESSSimulator()
-    modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    modbus = ModbusTCPSimulator(address="0.0.0.0", port=5021, unit_id=1)
     controller = DeviceController(device=bess, protocols=[modbus], register_map=BESS_MAP)
 
     controller.step(dt=0.1)
@@ -94,7 +94,7 @@ def test_controller_bess_applies_only_on_change():
 def test_controller_updates_inverter_power():
     pv = PVSimulator(rated_kw=10.0)
     pv.set_irradiance(1000.0)
-    modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    modbus = ModbusTCPSimulator(address="0.0.0.0", port=5021, unit_id=1)
     controller = DeviceController(device=pv, protocols=[modbus], register_map=RegisterMap([]))
 
     controller.step(dt=1.0)
@@ -109,7 +109,7 @@ def test_controller_updates_inverter_power():
 def test_controller_inverter_energy_accumulates():
     pv = PVSimulator(rated_kw=10.0)
     pv.set_irradiance(1000.0)
-    modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    modbus = ModbusTCPSimulator(address="0.0.0.0", port=5021, unit_id=1)
     controller = DeviceController(device=pv, protocols=[modbus], register_map=RegisterMap([]))
 
     for _ in range(3600):
@@ -143,7 +143,7 @@ def create_meter(load_kw, pv_kw=0.0, bess_kw=0.0):
 
 def test_controller_updates_energy_meter_import():
     meter, power_model = create_meter(load_kw=10.0)
-    modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    modbus = ModbusTCPSimulator(address="0.0.0.0", port=5021, unit_id=1)
     controller = DeviceController(device=meter, protocols=[modbus], register_map=RegisterMap([]))
 
     power_model.update(dt=3600)
@@ -157,7 +157,7 @@ def test_controller_updates_energy_meter_import():
 
 def test_controller_updates_energy_meter_export():
     meter, power_model = create_meter(load_kw=5.0, pv_kw=15.0)  # kW, not watts
-    modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    modbus = ModbusTCPSimulator(address="0.0.0.0", port=5021, unit_id=1)
     controller = DeviceController(device=meter, protocols=[modbus], register_map=RegisterMap([]))
 
     power_model.update(dt=3600)
@@ -171,7 +171,7 @@ def test_controller_updates_energy_meter_export():
 
 def test_controller_meter_is_passive_to_commands():
     meter, power_model = create_meter(load_kw=5.0)
-    modbus = ModbusSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    modbus = ModbusTCPSimulator(address="0.0.0.0", port=5021, unit_id=1)
     controller = DeviceController(device=meter, protocols=[modbus], register_map=RegisterMap([]))
 
     power_model.update(dt=3600)

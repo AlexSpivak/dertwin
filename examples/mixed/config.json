@@ -1,0 +1,32 @@
+{
+  "poll_interval": 2,
+  "assets": [
+    {
+      "type": "bess",
+      "name": "BESS-1",
+      "protocol": "modbus_tcp",
+      "host": "localhost",
+      "port": 55001,
+      "unit_id": 1,
+      "max_charge_kw": 30.0,
+      "max_discharge_kw": 30.0,
+      "register_map": "configs/register_maps/bess_modbus.yaml"
+    },
+    {
+      "type": "inverter",
+      "protocol": "modbus_rtu",
+      "serial_port": "/tmp/dertwin_pv_client",
+      "baudrate": 9600,
+      "unit_id": 1,
+      "register_map": "configs/register_maps/pv_inverter_modbus.yaml"
+    },
+    {
+      "type": "energy_meter",
+      "protocol": "modbus_rtu",
+      "serial_port": "/tmp/dertwin_meter_client",
+      "baudrate": 9600,
+      "unit_id": 1,
+      "register_map": "configs/register_maps/energy_meter_modbus.yaml"
+    }
+  ]
+}

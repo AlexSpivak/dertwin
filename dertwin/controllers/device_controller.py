@@ -26,6 +26,11 @@ class DeviceController:
 
         # First run: initialize baseline without applying
         if not self._initialized:
+            # initiate commands if there are values already requested.
+            if any(commands.values()):
+                filtered_commands = {k: v for k, v in commands.items() if v != 0.0}
+                applied = self.device.apply_commands(filtered_commands)
+                self.write_protocol_commands(applied)
             self._last_commands = dict(commands)
             self.device.init_applied_commands(commands)
             self._initialized = True

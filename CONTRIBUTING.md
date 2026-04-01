@@ -48,14 +48,16 @@ Run tests:
 pytest
 ```
 
+For RTU-related development, install `socat` to create virtual serial pairs (see [Testing RTU](#testing-rtu) below).
+
 ---
 
 ## Architecture Boundaries
 
 DER Twin has a strict separation between layers. Please keep it that way:
 
-- **Protocol layer** — exposes registers over Modbus (or future protocols). Never modifies device state directly.
-- **Controller layer** — bridges protocol commands to device logic. Owns the read/write mapping.
+- **Protocol layer** — exposes registers over Modbus (TCP or RTU). Never modifies device state directly.
+- **Controller layer** — bridges protocol commands to device logic. Owns the read/write mapping. Transport-agnostic — works identically with TCP and RTU protocols.
 - **Device layer** — owns physics. Never knows about protocols.
 - **Engine** — owns time. All devices step together on each tick.
 - **External models** — provide environmental inputs (irradiance, temperature, grid). Devices read from them, never write to them.
@@ -72,6 +74,42 @@ If a PR mixes these concerns it will be asked to refactor.
 4. Wire it into `SiteController._create_device()` in `dertwin/controllers/site_controller.py`
 5. Add unit tests in `tests/devices/<your_device>/`
 6. Add an integration test in `tests/controllers/test_site_controller.py`
+
+---
+
+## Adding a New Protocol
+
+The protocol layer is designed for extension. Both `ModbusTCPSimulator` and `ModbusRTUSimulator` follow the same interface contract — any protocol that exposes `.context`, `.unit_id`, `run_server()`, and `shutdown()` can be plugged into `DeviceController` without changes.
+
+To add a new protocol:
+
+1. Implement the protocol class in `dertwin/protocol/` with the standard interface: `.context` (register datastore), `.unit_id`, `async run_server()`, `async shutdown()`
+2. Add a routing branch in `SiteController._create_protocol()` for the new `kind` string
+3. Ensure `shutdown()` handles startup failures gracefully (catch `Exception`, not just `CancelledError`)
+4. Add register-level unit tests in `tests/protocol/`
+5. Add integration tests in `tests/controllers/` covering the new protocol with `DeviceController` and `SimulationEngine`
+6. If applicable, add an EMS client wrapper in `examples/protocol/` following the `SimpleModbusClient` / `SimpleModbusRTUClient` pattern
+
+---
+
+## Testing RTU
+
+RTU tests that only exercise the register datastore (encode/decode, telemetry writes, command collection) don't need serial hardware — they use `/dev/null` as the port and never call `run_server()`.
+
+For end-to-end RTU testing with actual serial communication, use `socat` to create virtual serial port pairs:
+
+```bash
+# Install socat
+# macOS:
+brew install socat
+# Ubuntu/Debian:
+sudo apt install socat
+
+# Create a virtual serial pair
+socat -d -d pty,raw,echo=0,link=/tmp/dertwin_device pty,raw,echo=0,link=/tmp/dertwin_client &
+```
+
+This gives you two linked pseudo-terminals — point the simulator at `/tmp/dertwin_device` and the client at `/tmp/dertwin_client`. Both sides must use different ends of the pair.
 
 ---
 
