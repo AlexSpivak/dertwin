@@ -53,7 +53,7 @@
       ]
     },
     {
-      "comment": "PV inverter — 20 kW rated, Modbus RTU (serial)",
+      "comment": "PV inverter — 20 kW rated, Modbus RTU (dedicated serial link, unit_id=1)",
       "type": "inverter",
       "rated_kw": 20.0,
       "protocols": [
@@ -61,20 +61,20 @@
           "kind": "modbus_rtu",
           "port": "/tmp/dertwin_pv",
           "baudrate": 9600,
-          "unit_id": 2,
+          "unit_id": 1,
           "register_map": "pv_inverter_modbus.yaml"
         }
       ]
     },
     {
-      "comment": "Energy meter — PCC measurement, Modbus RTU (serial)",
+      "comment": "Energy meter — PCC measurement, Modbus RTU (dedicated serial link, unit_id=1)",
       "type": "energy_meter",
       "protocols": [
         {
           "kind": "modbus_rtu",
           "port": "/tmp/dertwin_meter",
           "baudrate": 9600,
-          "unit_id": 3,
+          "unit_id": 1,
           "register_map": "energy_meter_modbus.yaml"
         }
       ]

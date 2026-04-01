@@ -48,7 +48,7 @@ python generate_compose.py configs/simple_config.json
 docker compose up --build
 ```
 
-`generate_compose.py` reads the config and generates a `docker-compose.yml` with the correct ports automatically. No manual port configuration needed.
+`generate_compose.py` reads the config and generates a `docker-compose.yml` with the correct ports automatically. No manual port configuration needed. For mixed-protocol configs with RTU, see [Docker with RTU](#docker-with-rtu) below.
 
 ---
 
@@ -93,7 +93,7 @@ For a mixed-protocol site (BESS on TCP + PV and meter on RTU), see [Mixed Protoc
 - Multi-device support across independent ports
 - External model events (voltage sags, frequency deviations)
 - Simulation start time control (`start_time_h`) — start at noon, peak load, etc.
-- Docker support with auto-generated Compose files
+- Docker support with auto-generated Compose files and RTU-over-TCP bridging
 - Deterministic simulation with seeded random models
 - Fully tested with `pytest`
 
@@ -123,6 +123,7 @@ dertwin/
 │   └── protocol/            # Shared Modbus TCP and RTU clients
 ├── tests/                   # Full test suite
 ├── generate_compose.py      # Docker Compose generator
+├── docker-entrypoint.sh     # Container entrypoint (socat + RTU bridge)
 └── Dockerfile
 ```
 
@@ -231,8 +232,8 @@ You should see:
 ```
 INFO | Building site: mixed-protocol-site
 INFO | Starting Modbus TCP server | 0.0.0.0:55001 | unit=1
-INFO | Starting Modbus RTU server | port=/tmp/dertwin_pv | baudrate=9600 | unit=2
-INFO | Starting Modbus RTU server | port=/tmp/dertwin_meter | baudrate=9600 | unit=3
+INFO | Starting Modbus RTU server | port=/tmp/dertwin_pv | baudrate=9600 | unit=1
+INFO | Starting Modbus RTU server | port=/tmp/dertwin_meter | baudrate=9600 | unit=1
 INFO | Simulation engine started | step=0.100s
 ```
 
@@ -252,8 +253,8 @@ Expected output:
 
 [EMS] Mixed-protocol EMS running
   [BESS-1] RUN  | SOC= 50.0% | P= -30.00 kW | MODE=charge
-  [PV]    P= 18.50 kW (producing)
-  [METER] Grid= -8.50 kW (exporting) | Freq=50.002 Hz | Import=0.0 kWh | Export=2.1 kWh
+  [PV]    P= 16.40 kW (producing)
+  [METER] Grid= +23.57 kW (importing) | Freq=50.000 Hz | Import=0.1 kWh | Export=0.0 kWh
 ```
 
 The key point: socat creates a **pair** of linked pseudo-terminals for each connection. The simulator opens one end (`/tmp/dertwin_pv`) and the EMS client opens the other (`/tmp/dertwin_pv_client`). Both sides must use different ends of the pair.
@@ -264,14 +265,91 @@ If RTU serial ports are unavailable, the EMS will still run with BESS-only contr
 
 ## 🐳 Docker
 
+### TCP-only configs
+
+For configs that only use Modbus TCP, Docker setup is straightforward:
+
 ```bash
-# Generate docker-compose.yml from any config
 python generate_compose.py configs/full_site_config.json
-
-# Ports are read automatically from the config — no manual editing
 docker compose up --build
+```
 
-# Override config at runtime without rebuilding
+TCP ports are mapped automatically from the config. Connect your EMS to `localhost:<port>`.
+
+### Docker with RTU
+
+RTU serial devices use pseudo-terminals (`/dev/pts/`) which exist only inside the container's kernel namespace and can't be accessed from the host via volume mounts. The entrypoint solves this by bridging each RTU serial port to a TCP port inside the container using a Python asyncio relay. From the host, `socat` converts the TCP connection back into a local PTY that the EMS opens as a normal serial port.
+
+**Step 1** — generate the compose file and start the container:
+
+```bash
+python generate_compose.py configs/mixed_protocol_config.json
+docker compose up --build
+```
+
+You should see:
+```
+[entrypoint] Creating serial pair: /tmp/dertwin_pv <-> /tmp/dertwin_pv_bridge
+[entrypoint] Bridging /tmp/dertwin_pv_bridge -> TCP port 56001
+[bridge] /tmp/dertwin_pv_bridge <-> TCP :56001
+[entrypoint] Creating serial pair: /tmp/dertwin_meter <-> /tmp/dertwin_meter_bridge
+[entrypoint] Bridging /tmp/dertwin_meter_bridge -> TCP port 56002
+[bridge] /tmp/dertwin_meter_bridge <-> TCP :56002
+[entrypoint] RTU bridges ready
+[entrypoint] Starting DERTwin simulator
+INFO | Starting Modbus TCP server | 0.0.0.0:55001 | unit=1
+INFO | Starting Modbus RTU server | port=/tmp/dertwin_pv | baudrate=9600 | unit=1
+INFO | Starting Modbus RTU server | port=/tmp/dertwin_meter | baudrate=9600 | unit=1
+```
+
+`generate_compose.py` detects RTU ports in the config and automatically exposes the bridge TCP ports (56001, 56002, ...) alongside the regular Modbus TCP ports in the generated `docker-compose.yml`.
+
+**Step 2** — in a separate terminal on the host, create local PTY endpoints (requires `socat`):
+
+```bash
+socat pty,raw,echo=0,link=/tmp/dertwin_pv_client tcp:localhost:56001 &
+socat pty,raw,echo=0,link=/tmp/dertwin_meter_client tcp:localhost:56002 &
+```
+
+This creates `/tmp/dertwin_pv_client` and `/tmp/dertwin_meter_client` on the host — the same paths the EMS expects.
+
+**Step 3** — run the EMS (same command as the local setup):
+
+```bash
+cd examples
+python main_mixed.py
+```
+
+Expected output:
+```
+[BESS-1] TCP connected
+[PV] RTU connected
+[METER] RTU connected
+[BESS-1] Starting in CHARGE mode
+
+[EMS] Mixed-protocol EMS running
+  [BESS-1] RUN  | SOC= 50.0% | P= -30.00 kW | MODE=charge
+  [PV]    P= 16.40 kW (producing)
+  [METER] Grid= +23.57 kW (importing) | Freq=50.000 Hz | Import=0.1 kWh | Export=0.0 kWh
+```
+
+The data flow for each RTU device:
+
+```
+EMS (host)
+  └─ SimpleModbusRTUClient opens /tmp/dertwin_pv_client (PTY)
+       └─ socat on host: PTY ↔ TCP :56001
+            └─ Docker port forward
+                 └─ Python relay in container: TCP ↔ /tmp/dertwin_pv_bridge (PTY)
+                      └─ socat pair: /tmp/dertwin_pv_bridge ↔ /tmp/dertwin_pv
+                           └─ ModbusRTUSimulator
+```
+
+The EMS uses the exact same config for both local and Docker setups — the serial paths (`/tmp/dertwin_pv_client`, `/tmp/dertwin_meter_client`) are identical. The only difference is how those paths are created: locally via direct socat pairs, or via Docker with TCP bridging.
+
+### Override config at runtime
+
+```bash
 docker run \
   -v /path/to/my/configs:/app/configs:ro \
   -e CONFIG_PATH=/app/configs/my_site.json \
@@ -299,6 +377,7 @@ The test suite covers device physics, register encoding, external models, protoc
 - [ ] MQTT integration
 - [x] Modbus RTU support
 - [x] Mixed-protocol sites (TCP + RTU)
+- [x] Docker RTU-over-TCP bridging
 - [x] Published PyPI package
 
 ---
