@@ -1,11 +1,13 @@
 from typing import List, Dict
 from dertwin.core.device import SimulatedDevice
 from dertwin.core.registers import RegisterMap
-from dertwin.protocol.modbus import (
+
+from dertwin.protocol.modbus_helpers import (
     collect_write_instructions,
     write_telemetry_registers,
     write_command_registers,
 )
+
 
 class DeviceController:
 
@@ -49,34 +51,31 @@ class DeviceController:
         merged: Dict[str, float] = {}
 
         for proto in self.protocols:
+            # Pass full register_map — helpers extract .writes internally
             raw_cmds = collect_write_instructions(
-                self.register_map.writes,
-                proto.context,
-                proto.unit_id,
+                register_map=self.register_map,
+                context=proto.context,
+                unit_id=proto.unit_id,
             )
-
-            for vendor_name, value in raw_cmds.items():
-                reg = self.register_map.get_by_name(vendor_name)
-
-                internal_name = reg.internal_name or reg.name
-                merged[internal_name] = value
+            # collect_write_instructions now returns internal_name → value directly
+            merged.update(raw_cmds)
 
         return merged
 
     def apply_telemetry(self, telemetry: Dict[str, float]) -> None:
         for proto in self.protocols:
             write_telemetry_registers(
-                self.register_map.reads,
-                proto.context,
-                proto.unit_id,
-                telemetry,
+                context=proto.context,
+                unit_id=proto.unit_id,
+                telemetry=telemetry,
+                register_map=self.register_map,
             )
 
     def write_protocol_commands(self, commands: Dict[str, float]) -> None:
         for proto in self.protocols:
             write_command_registers(
-                self.register_map.writes,
-                proto.context,
-                proto.unit_id,
-                commands,
+                context=proto.context,
+                unit_id=proto.unit_id,
+                commands=commands,
+                register_map=self.register_map,
             )

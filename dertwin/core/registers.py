@@ -15,6 +15,11 @@ class RegisterDirection(str, Enum):
     WRITE = "write"
 
 
+class RegisterEndian(str, Enum):
+    BIG = "big"
+    LITTLE = "little"
+
+
 # ==========================================================
 # REGISTER DEFINITION
 # ==========================================================
@@ -32,6 +37,7 @@ class RegisterDefinition:
     unit: str = ""
     options: Optional[Dict[int, str]] = None
     description: Optional[str] = None
+    endian: RegisterEndian = RegisterEndian.BIG
 
     @property
     def key(self) -> Tuple[int, int, RegisterDirection]:
@@ -39,6 +45,10 @@ class RegisterDefinition:
         Unique identifier inside protocol space.
         """
         return self.address, self.func, self.direction
+
+    @property
+    def is_little_endian(self) -> bool:
+        return self.endian == RegisterEndian.LITTLE
 
 
 class RegisterMap:
@@ -84,6 +94,16 @@ class RegisterMap:
         if "count" not in entry:
             raise ValueError(f"Missing 'count' for register: {entry['name']}")
 
+        # Parse endian — default to BIG for backward compatibility
+        raw_endian = entry.get("endian", "big")
+        try:
+            endian = RegisterEndian(raw_endian)
+        except ValueError:
+            raise ValueError(
+                f"Invalid endian value '{raw_endian}' for register '{entry['name']}'. "
+                f"Must be 'big' or 'little'."
+            )
+
         return RegisterDefinition(
             name=entry["name"],
             internal_name=entry["internal_name"],
@@ -96,6 +116,7 @@ class RegisterMap:
             unit=entry.get("unit", ""),
             options=entry.get("options"),
             description=entry.get("description"),
+            endian=endian,  # NEW
         )
 
     def _build_indexes(self):
