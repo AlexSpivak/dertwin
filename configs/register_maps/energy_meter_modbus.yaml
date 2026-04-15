@@ -1,6 +1,8 @@
 protocol: modbus_tcp
 device_type: energy_meter
 description: "Energy Meter Modbus register map"
+# Endianness: big-endian (default). For little-endian devices,
+# create a device-specific register map and add endian: little to int32/uint32 registers.
 
 registers:
 
@@ -8,125 +10,19 @@ registers:
   # TELEMETRY (READ)
   # ==========================================================
 
-  - name: total_active_power
-    internal_name: total_active_power
-    address: 0
-    func: 0x04
-    direction: read
-    type: int32
-    count: 2
-    scale: 0.01
-    unit: kW
-
-  - name: total_reactive_power
-    internal_name: total_reactive_power
-    address: 2
-    func: 0x04
-    direction: read
-    type: int32
-    count: 2
-    scale: 0.01
-    unit: kVar
-
-  - name: total_power_factor
-    internal_name: total_power_factor
-    address: 12
-    func: 0x04
-    direction: read
-    type: int16
-    count: 1
-    scale: 0.001
-    unit: ""
-
-  - name: grid_frequency
-    internal_name: grid_frequency
-    address: 13
-    func: 0x04
-    direction: read
-    type: uint16
-    count: 1
-    scale: 0.01
-    unit: Hz
-
-  - name: total_import_energy
-    internal_name: total_import_energy
-    address: 26
-    func: 0x04
-    direction: read
-    type: uint32
-    count: 2
-    scale: 0.01
-    unit: kWh
-
-  - name: total_export_energy
-    internal_name: total_export_energy
-    address: 28
-    func: 0x04
-    direction: read
-    type: uint32
-    count: 2
-    scale: 0.01
-    unit: kWh
-
-
   # ----------------------
-  # Phase A
+  # Phase Active Power
   # ----------------------
-
-  - name: phase_voltage_a
-    internal_name: phase_voltage_a
-    address: 14
-    func: 0x04
-    direction: read
-    type: uint16
-    count: 1
-    scale: 0.1
-    unit: V
-
-  - name: phase_current_a
-    internal_name: phase_current_a
-    address: 15
-    func: 0x04
-    direction: read
-    type: int16
-    count: 1
-    scale: 0.01
-    unit: A
 
   - name: phase_active_power_a
     internal_name: phase_active_power_a
-    address: 16
+    address: 18
     func: 0x04
     direction: read
     type: int32
     count: 2
-    scale: 0.01
+    scale: 0.0001
     unit: kW
-
-
-  # ----------------------
-  # Phase B
-  # ----------------------
-
-  - name: phase_voltage_b
-    internal_name: phase_voltage_b
-    address: 18
-    func: 0x04
-    direction: read
-    type: uint16
-    count: 1
-    scale: 0.1
-    unit: V
-
-  - name: phase_current_b
-    internal_name: phase_current_b
-    address: 19
-    func: 0x04
-    direction: read
-    type: int16
-    count: 1
-    scale: 0.01
-    unit: A
 
   - name: phase_active_power_b
     internal_name: phase_active_power_b
@@ -135,44 +31,18 @@ registers:
     direction: read
     type: int32
     count: 2
-    scale: 0.01
+    scale: 0.0001
     unit: kW
-
-
-  # ----------------------
-  # Phase C
-  # ----------------------
-
-  - name: phase_voltage_c
-    internal_name: phase_voltage_c
-    address: 22
-    func: 0x04
-    direction: read
-    type: uint16
-    count: 1
-    scale: 0.1
-    unit: V
-
-  - name: phase_current_c
-    internal_name: phase_current_c
-    address: 23
-    func: 0x04
-    direction: read
-    type: int16
-    count: 1
-    scale: 0.01
-    unit: A
 
   - name: phase_active_power_c
     internal_name: phase_active_power_c
-    address: 24
+    address: 22
     func: 0x04
     direction: read
     type: int32
     count: 2
-    scale: 0.01
+    scale: 0.0001
     unit: kW
-
 
   # ----------------------
   # Apparent Power
@@ -180,7 +50,7 @@ registers:
 
   - name: apparent_power_a
     internal_name: apparent_power_a
-    address: 30
+    address: 24
     func: 0x04
     direction: read
     type: int32
@@ -190,7 +60,7 @@ registers:
 
   - name: apparent_power_b
     internal_name: apparent_power_b
-    address: 32
+    address: 26
     func: 0x04
     direction: read
     type: int32
@@ -200,7 +70,7 @@ registers:
 
   - name: apparent_power_c
     internal_name: apparent_power_c
-    address: 34
+    address: 28
     func: 0x04
     direction: read
     type: int32
@@ -208,14 +78,13 @@ registers:
     scale: 0.0001
     unit: kVA
 
-
   # ----------------------
   # Reactive Power
   # ----------------------
 
   - name: reactive_power_a
     internal_name: reactive_power_a
-    address: 36
+    address: 30
     func: 0x04
     direction: read
     type: int32
@@ -225,7 +94,7 @@ registers:
 
   - name: reactive_power_b
     internal_name: reactive_power_b
-    address: 38
+    address: 32
     func: 0x04
     direction: read
     type: int32
@@ -235,13 +104,248 @@ registers:
 
   - name: reactive_power_c
     internal_name: reactive_power_c
-    address: 40
+    address: 34
     func: 0x04
     direction: read
     type: int32
     count: 2
     scale: 0.0001
     unit: kVar
+
+  # ----------------------
+  # System Totals
+  # ----------------------
+
+  - name: total_active_power
+    internal_name: total_active_power
+    address: 40
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.0001
+    unit: kW
+
+  - name: total_reactive_power
+    internal_name: total_reactive_power
+    address: 44
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.0001
+    unit: kVar
+
+  # ----------------------
+  # Power Factor and Frequency
+  # ----------------------
+
+  - name: total_power_factor
+    internal_name: total_power_factor
+    address: 49
+    func: 0x04
+    direction: read
+    type: int16
+    count: 1
+    scale: 0.001
+    unit: ""
+
+  - name: grid_frequency
+    internal_name: grid_frequency
+    address: 51
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: Hz
+
+  # ----------------------
+  # Total Energy
+  # ----------------------
+
+  - name: total_import_energy
+    internal_name: total_import_energy
+    address: 52
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: kWh
+
+  - name: total_export_energy
+    internal_name: total_export_energy
+    address: 78
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: kWh
+
+
+  # ----------------------
+  # Demand
+  # ----------------------
+
+  - name: current_demand_kw
+    internal_name: current_demand_kw
+    address: 56
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.0001
+    unit: kW
+    description: "Sliding window average demand (default 15-minute window)"
+
+  - name: max_demand_kw
+    internal_name: max_demand_kw
+    address: 58
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.0001
+    unit: kW
+    description: "Peak demand since last reset"
+
+  # ----------------------
+  # Phase Voltages
+  # ----------------------
+
+  - name: phase_voltage_a
+    internal_name: phase_voltage_a
+    address: 0
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: V
+
+  - name: phase_voltage_b
+    internal_name: phase_voltage_b
+    address: 2
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: V
+
+  - name: phase_voltage_c
+    internal_name: phase_voltage_c
+    address: 4
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.1
+    unit: V
+
+  # ----------------------
+  # Phase Currents
+  # ----------------------
+
+  - name: phase_current_a
+    internal_name: phase_current_a
+    address: 12
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.001
+    unit: A
+
+  - name: phase_current_b
+    internal_name: phase_current_b
+    address: 14
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.001
+    unit: A
+
+  - name: phase_current_c
+    internal_name: phase_current_c
+    address: 16
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.001
+    unit: A
+
+  # ----------------------
+  # Per-Phase Import Energy
+  # ----------------------
+
+  - name: phase_import_energy_a
+    internal_name: phase_import_energy_a
+    address: 64
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: kWh
+
+  - name: phase_import_energy_b
+    internal_name: phase_import_energy_b
+    address: 66
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: kWh
+
+  - name: phase_import_energy_c
+    internal_name: phase_import_energy_c
+    address: 68
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: kWh
+
+  # ----------------------
+  # Per-Phase Export Energy
+  # ----------------------
+
+  - name: phase_export_energy_a
+    internal_name: phase_export_energy_a
+    address: 70
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: kWh
+
+  - name: phase_export_energy_b
+    internal_name: phase_export_energy_b
+    address: 72
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: kWh
+
+  - name: phase_export_energy_c
+    internal_name: phase_export_energy_c
+    address: 74
+    func: 0x04
+    direction: read
+    type: uint32
+    count: 2
+    scale: 0.1
+    unit: kWh
 
 
   # ==========================================================

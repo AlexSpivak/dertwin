@@ -12,6 +12,7 @@ from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
 from dertwin.devices.external.grid_frequency import FrequencyEvent
 from dertwin.devices.external.grid_voltage import VoltageEvent
 from dertwin.devices.pv.simulator import PVSimulator
+from dertwin.protocol.modbus_helpers import write_command_registers
 from dertwin.telemetry.energy_meter import EnergyMeterTelemetry
 
 
@@ -762,6 +763,139 @@ async def test_start_time_propagates_to_all_external_models():
         # Ambient temperature at peak hour should be at or above mean
         temp = external.ambient_temperature_model.get_temperature()
         assert temp >= 20.0, f"Expected temp ≥ mean at peak hour, got {temp}"
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+# ==========================================================
+# PV CURTAILMENT E2E TESTS
+# Add these to test_site_controller.py
+# ==========================================================
+
+@pytest.mark.asyncio
+async def test_pv_curtailment_via_modbus():
+    """
+    Curtail PV to 50% via active_power_rate register.
+    Output must be between 0 and 75% of full output.
+
+    Writes directly to the protocol context (same approach as RTU tests)
+    to avoid Modbus TCP round-trip timing issues.
+    """
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    reg_map_path = project_root / "configs/register_maps/pv_inverter_modbus.yaml"
+    register_map = RegisterMap.from_yaml(reg_map_path)
+
+    cfg = make_config([{"type": "inverter", "rated_kw": 10.0}], base_port=57100)
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+
+    try:
+        await wait_ready(57100)
+
+        pv: PVSimulator = get_device(site, PVSimulator)
+        pv.set_irradiance(1000.0)
+
+        proto = site.protocols[0]
+
+        # Write rate=100 directly into context so controller initialises
+        # with 100 rather than the register default of 0
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"active_power_rate": 100},
+            register_map=register_map,
+        )
+
+        # Ramp to full output
+        await run_steps(site, 100)
+        full_power = pv.get_telemetry().total_active_power
+        assert full_power > 0.0, f"PV should be producing at full rate, got {full_power}"
+
+        # Write rate=50 — controller sees 100→50 change
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"active_power_rate": 50},
+            register_map=register_map,
+        )
+
+        # Let curtailment take effect
+        await run_steps(site, 100)
+        curtailed_power = pv.get_telemetry().total_active_power
+
+        assert 0 < curtailed_power < full_power * 0.75, (
+            f"Expected 0 < curtailed ({curtailed_power:.3f} kW) "
+            f"< 75% of full ({full_power * 0.75:.3f} kW)"
+        )
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_pv_remote_off_via_modbus():
+    """
+    Disable PV via remote_on_off=0. Output must drop to zero.
+
+    Writes directly to the protocol context to avoid timing issues.
+    """
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    reg_map_path = project_root / "configs/register_maps/pv_inverter_modbus.yaml"
+    register_map = RegisterMap.from_yaml(reg_map_path)
+
+    cfg = make_config([{"type": "inverter", "rated_kw": 10.0}], base_port=57110)
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+
+    try:
+        await wait_ready(57110)
+
+        pv: PVSimulator = get_device(site, PVSimulator)
+        pv.set_irradiance(1000.0)
+
+        proto = site.protocols[0]
+
+        # Establish non-default baseline: rate=100, remote_on_off=1
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"active_power_rate": 100, "remote_on_off": 1},
+            register_map=register_map,
+        )
+
+        # Ramp to full output
+        await run_steps(site, 100)
+        assert pv.get_telemetry().total_active_power > 0.0
+
+        # Write remote_on_off=0 — controller sees 1→0 transition
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"remote_on_off": 0},
+            register_map=register_map,
+        )
+
+        # Let inverter ramp to zero
+        await run_steps(site, 100)
+
+        assert pv.get_telemetry().total_active_power == pytest.approx(0.0, abs=0.1), (
+            f"Expected zero output after remote off, "
+            f"got {pv.get_telemetry().total_active_power:.3f} kW"
+        )
 
     finally:
         await site.stop()

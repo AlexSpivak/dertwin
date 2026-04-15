@@ -130,6 +130,35 @@ def test_phase_powers_sum_to_total():
 
 
 # ============================================================
+# New fields default to zero from model
+# ============================================================
+
+def test_model_new_fields_default_to_zero():
+    """
+    Model.measure() returns zero for accumulated fields —
+    the simulator is responsible for populating them.
+    """
+    model = EnergyMeterModel(seed=1)
+
+    telemetry = model.measure(
+        grid_power_kw=10.0,
+        import_energy_kwh=5.0,
+        export_energy_kwh=0.0,
+        grid_frequency=50.0,
+        voltage_ll=400,
+    )
+
+    assert telemetry.phase_import_energy_a == 0.0
+    assert telemetry.phase_import_energy_b == 0.0
+    assert telemetry.phase_import_energy_c == 0.0
+    assert telemetry.phase_export_energy_a == 0.0
+    assert telemetry.phase_export_energy_b == 0.0
+    assert telemetry.phase_export_energy_c == 0.0
+    assert telemetry.current_demand_kw == 0.0
+    assert telemetry.max_demand_kw == 0.0
+
+
+# ============================================================
 # Power factor bounds
 # ============================================================
 
@@ -227,6 +256,7 @@ def test_telemetry_contains_all_fields():
     d = telemetry.to_dict()
 
     expected_fields = {
+        # Original fields
         "total_active_power",
         "total_reactive_power",
         "total_power_factor",
@@ -239,6 +269,15 @@ def test_telemetry_contains_all_fields():
         "phase_active_power_c",
         "total_import_energy",
         "total_export_energy",
+        # New fields
+        "phase_import_energy_a",
+        "phase_import_energy_b",
+        "phase_import_energy_c",
+        "phase_export_energy_a",
+        "phase_export_energy_b",
+        "phase_export_energy_c",
+        "current_demand_kw",
+        "max_demand_kw",
     }
 
     assert expected_fields.issubset(d.keys())
