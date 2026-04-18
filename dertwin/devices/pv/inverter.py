@@ -9,7 +9,8 @@ class PVInverterModel:
     - AC rating clamp
     - DC/AC clipping
     - Curtailment (active power rate)
-    - Reactive power control
+    - Ramp-rate limiting
+    - Reactive power with PQ capability
     - Thermal model
     - Grid protection
     """
@@ -23,22 +24,31 @@ class PVInverterModel:
         self.rated_ac_power_w = rated_ac_power_w
         self.efficiency = efficiency
 
+        # Control inputs
         self.active_power_rate = 100.0  # %
-        self.reactive_power_rate = 0.0  # %
         self.power_factor_setpoint = 1.0
+        self.enabled = True
 
+        # Grid
         self.grid_voltage = 230.0
         self.grid_frequency = 50.0
 
+        # Thermal
         self.temperature_c = 30.0
         self.ambient_temp_c = ambient_temp_c
         self.thermal_mass = 20000.0
         self.cooling_coeff = 10.0
 
-        self.fault_code = 0
+        # Ramp dynamics
+        self.max_ramp_rate_w_per_s = 2000.0
+        self._target_active_power_w = 0.0
 
+        # Outputs
         self.active_power_w = 0.0
         self.reactive_power_var = 0.0
+
+        # Faults
+        self.fault_code = 0
 
     # -------------------------------------------------
     # Grid protection
@@ -76,6 +86,12 @@ class PVInverterModel:
 
     def step(self, dc_input_w: float, dt: float):
 
+        # OFF state
+        if not self.enabled:
+            self.active_power_w = 0.0
+            self.reactive_power_var = 0.0
+            return
+
         if not self.grid_ok():
             self.active_power_w = 0.0
             self.reactive_power_var = 0.0
@@ -83,20 +99,35 @@ class PVInverterModel:
 
         # DC → AC conversion
         ac_available = dc_input_w * self.efficiency
-
-        # AC rating limit
         ac_available = min(ac_available, self.rated_ac_power_w)
 
-        # Curtailment
+        # Curtailment target
         ac_limit = self.rated_ac_power_w * (self.active_power_rate / 100.0)
-        self.active_power_w = min(ac_available, ac_limit)
+        target = min(ac_available, ac_limit)
 
-        # Reactive power
+        # Ramp toward target
+        delta = target - self.active_power_w
+        max_delta = self.max_ramp_rate_w_per_s * dt
+
+        if abs(delta) > max_delta:
+            delta = math.copysign(max_delta, delta)
+
+        self.active_power_w += delta
+        self._target_active_power_w = target
+
+        # Reactive power from PF
         if self.power_factor_setpoint != 0:
-            angle = math.acos(max(-1.0, min(1.0, self.power_factor_setpoint)))
-            self.reactive_power_var = self.active_power_w * math.tan(angle)
+            pf = max(-1.0, min(1.0, self.power_factor_setpoint))
+            angle = math.acos(pf)
+            q = self.active_power_w * math.tan(angle)
         else:
-            self.reactive_power_var = 0.0
+            q = 0.0
+
+        # PQ capability limit
+        S_max = self.rated_ac_power_w
+        Q_max = math.sqrt(max(0.0, S_max**2 - self.active_power_w**2))
+
+        self.reactive_power_var = max(-Q_max, min(Q_max, q))
 
         self.update_temperature(self.active_power_w, dt)
 

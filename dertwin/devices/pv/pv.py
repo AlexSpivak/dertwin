@@ -16,8 +16,12 @@ class PVModel:
         self.today_energy_kwh = 0.0
         self.lifetime_energy_kwh = 0.0
 
+        self._last_dc_power_w = 0.0
+
     def step(self, dt: float):
         dc_power = self.panel.dc_power_w()
+        self._last_dc_power_w = dc_power
+
         self.inverter.step(dc_power, dt)
 
         ac_power = self.inverter.active_power_w
@@ -34,7 +38,7 @@ class PVModel:
         return PVTelemetry(
             inverter_status=1 if self.inverter.active_power_w > 10 else 0,
             total_active_power=self.inverter.active_power_w / 1000.0,
-            total_input_power=self.panel.dc_power_w() / 1000.0,
+            total_input_power=self._last_dc_power_w / 1000.0,
             today_output_energy=self.today_energy_kwh,
             lifetime_output_energy=self.lifetime_energy_kwh,
             grid_frequency=self.inverter.grid_frequency,
