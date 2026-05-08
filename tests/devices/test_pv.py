@@ -114,10 +114,12 @@ def test_active_power_rate_reduces_output():
     inv_full.set_irradiance(1000.0)
     inv_curtailed.set_irradiance(1000.0)
 
-    inv_full.update(dt=1.0)
-
     inv_curtailed.apply_commands({"active_power_rate": 50.0})
-    inv_curtailed.update(dt=1.0)
+
+    # Run enough steps for both inverters to ramp to their respective limits
+    for _ in range(20):
+        inv_full.update(dt=1.0)
+        inv_curtailed.update(dt=1.0)
 
     assert inv_curtailed.active_power_w < inv_full.active_power_w
 
@@ -242,8 +244,12 @@ def test_apply_commands_is_idempotent():
     applied1 = inv.apply_commands(commands)
     applied2 = inv.apply_commands(commands)
 
-    assert applied1 == applied2
-
+    # First call applies the command and returns it
+    assert applied1 == {"active_power_rate": 80.0}
+    # Second call with same value is a no-op — nothing changed
+    assert applied2 == {}
+    # Inverter state is unchanged after second call
+    assert inv.inverter.active_power_rate == 80.0
 
 def test_apply_commands_returns_applied_subset():
     """apply_commands must return only commands the device accepted."""

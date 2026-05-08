@@ -21,7 +21,6 @@ import pytest
 from pymodbus.client import AsyncModbusTcpClient
 
 from dertwin.controllers.site_controller import SiteController
-from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap
 from dertwin.devices.bess.simulator import BESSSimulator
 from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
@@ -30,8 +29,9 @@ from dertwin.devices.pv.simulator import PVSimulator
 from dertwin.protocol.modbus import (
     ModbusTCPSimulator,
     ModbusRTUSimulator,
+)
+from dertwin.protocol.modbus_helpers import (
     write_command_registers,
-    collect_write_instructions,
 )
 
 
@@ -75,16 +75,19 @@ def get_device(site, cls):
     )
 
 
-def get_controller(site, prefix: str):
-    return next(
-        c for c in site.controllers
-        if c.device.__class__.__name__.lower().startswith(prefix)
-    )
-
-
 def get_protocol(site, cls):
     """Return the first protocol instance matching the given class."""
     return next(p for p in site.protocols if isinstance(p, cls))
+
+
+def write_cmds(protocol, register_map: RegisterMap, commands: dict):
+    """Helper — write commands into a protocol's Modbus context."""
+    write_command_registers(
+        context=protocol.context,
+        unit_id=protocol.unit_id,
+        commands=commands,
+        register_map=register_map,
+    )
 
 
 def make_rtu_protocol_cfg(device_type: str, **overrides) -> dict:
@@ -346,10 +349,7 @@ class TestRTUCommandFlow:
         rtu = site.protocols[0]
         reg_map = load_register_map("bess")
 
-        write_command_registers(
-            reg_map.writes, rtu.context, 1,
-            {"start_stop_standby": 1, "on_grid_power_setpoint": 15.0},
-        )
+        write_cmds(rtu, reg_map, {"start_stop_standby": 1, "on_grid_power_setpoint": 15.0})
 
         for _ in range(500):
             for ctrl in site.controllers:
@@ -370,10 +370,7 @@ class TestRTUCommandFlow:
         rtu = site.protocols[0]
         reg_map = load_register_map("bess")
 
-        write_command_registers(
-            reg_map.writes, rtu.context, 1,
-            {"start_stop_standby": 1, "on_grid_power_setpoint": -15.0},
-        )
+        write_cmds(rtu, reg_map, {"start_stop_standby": 1, "on_grid_power_setpoint": -15.0})
 
         for _ in range(500):
             for ctrl in site.controllers:
@@ -392,10 +389,7 @@ class TestRTUCommandFlow:
         rtu = site.protocols[0]
         reg_map = load_register_map("energy_meter")
 
-        write_command_registers(
-            reg_map.writes, rtu.context, 1,
-            {"current_transformer_ratio": 999.0},
-        )
+        write_cmds(rtu, reg_map, {"current_transformer_ratio": 999.0})
 
         for _ in range(5):
             for ctrl in site.controllers:
@@ -433,12 +427,9 @@ class TestMixedProtocolEngine:
             pv = get_device(site, PVSimulator)
             pv.set_irradiance(800.0)
 
-            bess_rmap = load_register_map("bess")
             tcp = get_protocol(site, ModbusTCPSimulator)
-            write_command_registers(
-                bess_rmap.writes, tcp.context, 1,
-                {"start_stop_standby": 1, "on_grid_power_setpoint": 10.0},
-            )
+            bess_rmap = load_register_map("bess")
+            write_cmds(tcp, bess_rmap, {"start_stop_standby": 1, "on_grid_power_setpoint": 10.0})
 
             await run_steps(site, 200)
 
@@ -511,10 +502,7 @@ class TestMixedProtocolEngine:
             # Discharge the TCP BESS only
             tcp = get_protocol(site, ModbusTCPSimulator)
             bess_rmap = load_register_map("bess")
-            write_command_registers(
-                bess_rmap.writes, tcp.context, 1,
-                {"start_stop_standby": 1, "on_grid_power_setpoint": 15.0},
-            )
+            write_cmds(tcp, bess_rmap, {"start_stop_standby": 1, "on_grid_power_setpoint": 15.0})
 
             await run_steps(site, 300)
 
@@ -623,11 +611,7 @@ class TestDualProtocolDevice:
 
             rtu = get_protocol(site, ModbusRTUSimulator)
             reg_map = load_register_map("bess")
-
-            write_command_registers(
-                reg_map.writes, rtu.context, 1,
-                {"start_stop_standby": 1, "on_grid_power_setpoint": 15.0},
-            )
+            write_cmds(rtu, reg_map, {"start_stop_standby": 1, "on_grid_power_setpoint": 15.0})
 
             await run_steps(site, 300)
 

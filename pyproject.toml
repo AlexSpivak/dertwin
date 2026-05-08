@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dertwin"
-version = "0.1.4"
+version = "0.1.5"
 description = "Digital twin simulator for distributed energy resources — BESS, PV inverters, energy meters"
 readme = "README.md"
 license = { file = "LICENSE" }

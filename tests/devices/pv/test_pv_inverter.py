@@ -2,6 +2,9 @@ import math
 import pytest
 from dertwin.devices.pv.inverter import PVInverterModel
 
+def run_until_settled(inverter, dc_input_w, steps=10, dt=1.0):
+    for _ in range(steps):
+        inverter.step(dc_input_w=dc_input_w, dt=dt)
 
 def test_clipping_to_rated_power():
     inverter = PVInverterModel(rated_ac_power_w=5000)
@@ -49,7 +52,7 @@ def test_no_power_at_zero_dc_input():
 
 def test_dc_ac_efficiency_applied():
     inverter = PVInverterModel(rated_ac_power_w=10000, efficiency=0.97)
-    inverter.step(dc_input_w=4000, dt=1.0)
+    run_until_settled(inverter, dc_input_w=4000)
     # AC output should be DC * efficiency (if below rated and no curtailment)
     assert inverter.active_power_w == pytest.approx(4000 * 0.97, rel=1e-4)
 
@@ -107,3 +110,32 @@ def test_temperature_capped_at_max():
         inverter.step(dc_input_w=5000, dt=1.0)
 
     assert inverter.temperature_c <= 85.0
+
+def test_ramp_rate_limit():
+    inverter = PVInverterModel(rated_ac_power_w=10000)
+    inverter.max_ramp_rate_w_per_s = 1000
+
+    inverter.step(dc_input_w=10000, dt=1.0)
+
+    # Should not jump to full power instantly
+    assert inverter.active_power_w == pytest.approx(1000)
+
+def test_remote_off_disables_output():
+    inverter = PVInverterModel(rated_ac_power_w=5000)
+    inverter.enabled = False
+
+    inverter.step(dc_input_w=4000, dt=1.0)
+
+    assert inverter.active_power_w == 0.0
+
+
+def test_re_enable_recovers_with_ramp():
+    inverter = PVInverterModel(rated_ac_power_w=5000)
+
+    inverter.enabled = False
+    inverter.step(dc_input_w=4000, dt=1.0)
+
+    inverter.enabled = True
+    inverter.step(dc_input_w=4000, dt=1.0)
+
+    assert inverter.active_power_w > 0.0

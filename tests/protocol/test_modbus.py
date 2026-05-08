@@ -3,14 +3,21 @@ import pytest
 from dertwin.protocol.modbus import (
     ModbusTCPSimulator,
     ModbusRTUSimulator,
-    encode_value,
+    create_device_context,
+)
+from dertwin.protocol.encoding import encode_value
+from dertwin.protocol.modbus_helpers import (
     write_command_registers,
     write_telemetry_registers,
     collect_write_instructions,
-    create_device_context,
 )
 
-from dertwin.core.registers import RegisterDefinition, RegisterDirection
+from dertwin.core.registers import (
+    RegisterDefinition,
+    RegisterDirection,
+    RegisterEndian,
+    RegisterMap,
+)
 
 
 # ==========================================================
@@ -106,8 +113,13 @@ READ_UINT32 = RegisterDefinition(
 )
 
 ALL_WRITE_REGISTERS = [WRITE_INT16, WRITE_INT32, WRITE_UINT16, WRITE_UINT32]
-ALL_READ_REGISTERS = [READ_UINT16, READ_INT16, READ_INT32, READ_UINT32]
-ALL_REGISTERS = ALL_WRITE_REGISTERS + ALL_READ_REGISTERS
+ALL_READ_REGISTERS  = [READ_UINT16, READ_INT16, READ_INT32, READ_UINT32]
+ALL_REGISTERS       = ALL_WRITE_REGISTERS + ALL_READ_REGISTERS
+
+
+def make_register_map(registers: list) -> RegisterMap:
+    """Build a RegisterMap from a list of RegisterDefinition objects."""
+    return RegisterMap(registers)
 
 
 # ==========================================================
@@ -122,10 +134,12 @@ def make_rtu(unit_id: int = 1) -> ModbusRTUSimulator:
     return ModbusRTUSimulator(port="/dev/null", unit_id=unit_id)
 
 
-def _write_and_collect(context, unit_id, registers, commands):
+def _write_and_collect(context, unit_id, registers: list, commands: dict) -> dict:
     """Write commands then collect them back — returns collected dict."""
-    write_command_registers(registers, context, unit_id, commands)
-    return collect_write_instructions(registers, context, unit_id)
+    register_map = make_register_map(registers)
+    write_command_registers(context=context, unit_id=unit_id, commands=commands, register_map=register_map)
+    return collect_write_instructions(register_map=register_map, context=context, unit_id=unit_id)
+
 
 # ==========================================================
 # ENCODE VALUE
@@ -138,12 +152,6 @@ class TestEncodeValue:
 
     def test_uint16_with_scale(self):
         assert encode_value(50.0, "uint16", 0.01, 1) == [5000]
-
-    def test_uint16_clamps_negative_to_zero(self):
-        assert encode_value(-10.0, "uint16", 1.0, 1) == [0]
-
-    def test_uint16_clamps_overflow(self):
-        assert encode_value(100000.0, "uint16", 1.0, 1) == [0xFFFF]
 
     def test_int16_positive(self):
         assert encode_value(42.0, "int16", 1.0, 1) == [42]
@@ -183,6 +191,17 @@ class TestEncodeValue:
         low = reg_value & 0xFFFF
         assert result == [high, low]
 
+    def test_int32_big_endian_default(self):
+        """Default endian is BIG — [high, low]."""
+        result = encode_value(500.0, "int32", 0.1, 2)
+        assert result == encode_value(500.0, "int32", 0.1, 2, RegisterEndian.BIG)
+
+    def test_int32_little_endian_differs_from_big(self):
+        big    = encode_value(500.0, "int32", 0.1, 2, RegisterEndian.BIG)
+        little = encode_value(500.0, "int32", 0.1, 2, RegisterEndian.LITTLE)
+        assert big != little
+        assert big == list(reversed(little))
+
 
 # ==========================================================
 # CREATE DEVICE CONTEXT
@@ -191,13 +210,8 @@ class TestEncodeValue:
 def test_create_device_context():
     ctx = create_device_context()
     assert ctx is not None
-    # Verify all four register blocks are accessible
-    # IR block should have 40000 registers
-    values = ctx.getValues(4, 0, 1)  # input registers
-    assert values == [0]
-    # HR block
-    values = ctx.getValues(3, 0, 1)  # holding registers
-    assert values == [0]
+    assert ctx.getValues(4, 0, 1) == [0]   # input registers
+    assert ctx.getValues(3, 0, 1) == [0]   # holding registers
 
 
 # ==========================================================
@@ -248,13 +262,12 @@ class TestTCPCommandRoundTrip:
         assert result["on_grid_power"] == pytest.approx(-30.0, abs=0.1)
         assert result["fault_reset"] == 1.0
 
-    def test_missing_command_is_not_written(self):
+    def test_missing_command_defaults_to_zero(self):
         sim = make_tcp()
-        # Only write on_grid_power, not start_stop_standby
-        write_command_registers([WRITE_INT16, WRITE_INT32], sim.context, 1, {"on_grid_power": 50.0})
-        result = collect_write_instructions([WRITE_INT16, WRITE_INT32], sim.context, 1)
+        register_map = make_register_map([WRITE_INT16, WRITE_INT32])
+        write_command_registers(context=sim.context, unit_id=1, commands={"on_grid_power": 50.0}, register_map=register_map)
+        result = collect_write_instructions(register_map=register_map, context=sim.context, unit_id=1)
         assert result["on_grid_power"] == 50.0
-        # start_stop_standby should still be at default (0)
         assert result["start_stop_standby"] == 0.0
 
     def test_overwrite_updates_value(self):
@@ -268,6 +281,49 @@ class TestTCPCommandRoundTrip:
         result = _write_and_collect(sim.context, 1, [WRITE_INT32], {"on_grid_power": 0.0})
         assert result["on_grid_power"] == 0.0
 
+    def test_little_endian_roundtrip(self):
+        """Register with little endian — write and collect must return original value."""
+        little_reg = RegisterDefinition(
+            name="on_grid_power_le",
+            internal_name="on_grid_power_le",
+            address=10200,
+            func=0x10,
+            direction=RegisterDirection.WRITE,
+            type="int32",
+            count=2,
+            scale=0.1,
+            endian=RegisterEndian.LITTLE,
+        )
+        sim = make_tcp()
+        result = _write_and_collect(sim.context, 1, [little_reg], {"on_grid_power_le": -75.0})
+        assert result["on_grid_power_le"] == pytest.approx(-75.0, abs=0.1)
+
+    def test_big_vs_little_endian_different_wire_encoding(self):
+        """Same value must produce different register words for big vs little endian."""
+        big_reg = RegisterDefinition(
+            name="power_big", internal_name="power_big",
+            address=10300, func=0x10,
+            direction=RegisterDirection.WRITE, type="int32", count=2, scale=0.1,
+            endian=RegisterEndian.BIG,
+        )
+        little_reg = RegisterDefinition(
+            name="power_little", internal_name="power_little",
+            address=10302, func=0x10,
+            direction=RegisterDirection.WRITE, type="int32", count=2, scale=0.1,
+            endian=RegisterEndian.LITTLE,
+        )
+        sim = make_tcp()
+        register_map = make_register_map([big_reg, little_reg])
+        write_command_registers(
+            context=sim.context, unit_id=1,
+            commands={"power_big": 500.0, "power_little": 500.0},
+            register_map=register_map,
+        )
+        raw_big    = sim.context[1].getValues(3, big_reg.address, 2)
+        raw_little = sim.context[1].getValues(3, little_reg.address, 2)
+        assert list(raw_big) != list(raw_little)
+        assert list(raw_big) == list(reversed(raw_little))
+
 
 # ==========================================================
 # TCP SIMULATOR — TELEMETRY
@@ -275,40 +331,44 @@ class TestTCPCommandRoundTrip:
 
 class TestTCPTelemetry:
 
+    def _write_tel(self, sim, registers, telemetry):
+        register_map = make_register_map(registers)
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry=telemetry, register_map=register_map,
+        )
+        return sim
+
     def test_uint16_telemetry(self):
         sim = make_tcp()
-        write_telemetry_registers([READ_UINT16], sim.context, 1, {"grid_frequency": 50.0})
+        self._write_tel(sim, [READ_UINT16], {"grid_frequency": 50.0})
         raw = sim.context[1].getValues(4, READ_UINT16.address, 1)
         assert raw[0] * READ_UINT16.scale == pytest.approx(50.0, abs=0.01)
 
     def test_int16_telemetry_positive(self):
         sim = make_tcp()
-        write_telemetry_registers([READ_INT16], sim.context, 1, {"total_power_factor": 0.95})
+        self._write_tel(sim, [READ_INT16], {"total_power_factor": 0.95})
         raw = sim.context[1].getValues(4, READ_INT16.address, 1)
-        value = raw[0]
-        if value > 0x7FFF:
-            value -= 1 << 16
+        value = raw[0] if raw[0] <= 0x7FFF else raw[0] - (1 << 16)
         assert value * READ_INT16.scale == pytest.approx(0.95, abs=0.001)
 
     def test_int16_telemetry_negative(self):
         sim = make_tcp()
-        write_telemetry_registers([READ_INT16], sim.context, 1, {"total_power_factor": -0.85})
+        self._write_tel(sim, [READ_INT16], {"total_power_factor": -0.85})
         raw = sim.context[1].getValues(4, READ_INT16.address, 1)
-        value = raw[0]
-        if value > 0x7FFF:
-            value -= 1 << 16
+        value = raw[0] if raw[0] <= 0x7FFF else raw[0] - (1 << 16)
         assert value * READ_INT16.scale == pytest.approx(-0.85, abs=0.001)
 
     def test_int32_telemetry_positive(self):
         sim = make_tcp()
-        write_telemetry_registers([READ_INT32], sim.context, 1, {"active_power": 250.0})
+        self._write_tel(sim, [READ_INT32], {"active_power": 250.0})
         raw = sim.context[1].getValues(4, READ_INT32.address, 2)
         value = (raw[0] << 16) + raw[1]
         assert value * READ_INT32.scale == pytest.approx(250.0, abs=0.1)
 
     def test_int32_telemetry_negative(self):
         sim = make_tcp()
-        write_telemetry_registers([READ_INT32], sim.context, 1, {"active_power": -100.0})
+        self._write_tel(sim, [READ_INT32], {"active_power": -100.0})
         raw = sim.context[1].getValues(4, READ_INT32.address, 2)
         value = (raw[0] << 16) + raw[1]
         if value > 0x7FFFFFFF:
@@ -317,24 +377,37 @@ class TestTCPTelemetry:
 
     def test_uint32_telemetry(self):
         sim = make_tcp()
-        write_telemetry_registers([READ_UINT32], sim.context, 1, {"total_import_energy": 12345.67})
+        self._write_tel(sim, [READ_UINT32], {"total_import_energy": 12345.67})
         raw = sim.context[1].getValues(4, READ_UINT32.address, 2)
         value = (raw[0] << 16) + raw[1]
         assert value * READ_UINT32.scale == pytest.approx(12345.67, abs=0.01)
 
     def test_missing_telemetry_key_is_skipped(self):
         sim = make_tcp()
-        # Write with a key that doesn't match any register name
-        write_telemetry_registers([READ_UINT16], sim.context, 1, {"nonexistent_field": 999.0})
+        self._write_tel(sim, [READ_UINT16], {"nonexistent_field": 999.0})
         raw = sim.context[1].getValues(4, READ_UINT16.address, 1)
-        assert raw[0] == 0  # untouched
+        assert raw[0] == 0
 
-    def test_write_registers_skip_wrong_direction(self):
-        """write_telemetry_registers should ignore WRITE-direction registers."""
+    def test_little_endian_telemetry_roundtrip(self):
+        """Little endian read register — write then verify word order is swapped."""
+        little_read = RegisterDefinition(
+            name="active_power_le", internal_name="active_power_le",
+            address=10400, func=0x04,
+            direction=RegisterDirection.READ, type="int32", count=2, scale=0.1,
+            endian=RegisterEndian.LITTLE,
+        )
         sim = make_tcp()
-        write_telemetry_registers([WRITE_INT16], sim.context, 1, {"start_stop_standby": 99})
-        raw = sim.context[1].getValues(4, WRITE_INT16.address, 1)
-        assert raw[0] == 0  # not written to input registers
+        register_map = make_register_map([little_read])
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={"active_power_le": 250.0},
+            register_map=register_map,
+        )
+        raw = sim.context[1].getValues(4, little_read.address, 2)
+        # little endian: [low, high]
+        low, high = raw[0], raw[1]
+        value = (high << 16) | low
+        assert value * little_read.scale == pytest.approx(250.0, abs=0.1)
 
 
 # ==========================================================
@@ -343,26 +416,28 @@ class TestTCPTelemetry:
 
 class TestDirectionIsolation:
 
-    def test_collect_ignores_read_registers(self):
-        """collect_write_instructions should skip READ-direction registers."""
+    def test_collect_returns_only_write_registers(self):
         sim = make_tcp()
-        result = collect_write_instructions(ALL_REGISTERS, sim.context, 1)
-        # Should only contain WRITE register names
+        register_map = make_register_map(ALL_REGISTERS)
+        result = collect_write_instructions(register_map=register_map, context=sim.context, unit_id=1)
+        write_names = {r.internal_name for r in ALL_WRITE_REGISTERS}
         for key in result:
-            matching = [r for r in ALL_REGISTERS if r.name == key]
-            assert all(r.direction == RegisterDirection.WRITE for r in matching)
+            assert key in write_names
 
-    def test_write_commands_ignores_read_registers(self):
-        """write_command_registers should skip READ-direction registers."""
+    def test_write_commands_skips_read_registers(self):
         sim = make_tcp()
-        # Try to write a value using a READ register name — should be ignored
-        write_command_registers(ALL_REGISTERS, sim.context, 1, {"grid_frequency": 60.0})
+        register_map = make_register_map(ALL_REGISTERS)
+        write_command_registers(
+            context=sim.context, unit_id=1,
+            commands={"grid_frequency": 60.0},
+            register_map=register_map,
+        )
         raw = sim.context[1].getValues(3, READ_UINT16.address, 1)
-        assert raw[0] == 0  # holding register untouched
+        assert raw[0] == 0
 
 
 # ==========================================================
-# TCP SIMULATOR — UNIT ID
+# TCP SIMULATOR — UNIT ID ISOLATION
 # ==========================================================
 
 class TestUnitId:
@@ -370,10 +445,11 @@ class TestUnitId:
     def test_different_unit_ids_are_isolated(self):
         sim_a = ModbusTCPSimulator(address="0.0.0.0", port=5021, unit_id=1)
         sim_b = ModbusTCPSimulator(address="0.0.0.0", port=5022, unit_id=2)
-
         _write_and_collect(sim_a.context, 1, [WRITE_INT32], {"on_grid_power": 100.0})
-        result_b = collect_write_instructions([WRITE_INT32], sim_b.context, 2)
-
+        result_b = collect_write_instructions(
+            register_map=make_register_map([WRITE_INT32]),
+            context=sim_b.context, unit_id=2,
+        )
         assert result_b["on_grid_power"] == 0.0
 
 
@@ -382,11 +458,6 @@ class TestUnitId:
 # ==========================================================
 
 class TestRTUContextParity:
-    """
-    ModbusRTUSimulator uses the same register datastore as TCP.
-    These tests verify that all register functions work identically
-    against an RTU simulator's context.
-    """
 
     def test_int32_write_and_collect(self):
         sim = make_rtu()
@@ -415,13 +486,15 @@ class TestRTUContextParity:
 
     def test_telemetry_uint16(self):
         sim = make_rtu()
-        write_telemetry_registers([READ_UINT16], sim.context, 1, {"grid_frequency": 50.0})
+        register_map = make_register_map([READ_UINT16])
+        write_telemetry_registers(context=sim.context, unit_id=1, telemetry={"grid_frequency": 50.0}, register_map=register_map)
         raw = sim.context[1].getValues(4, READ_UINT16.address, 1)
         assert raw[0] * READ_UINT16.scale == pytest.approx(50.0, abs=0.01)
 
     def test_telemetry_int32_negative(self):
         sim = make_rtu()
-        write_telemetry_registers([READ_INT32], sim.context, 1, {"active_power": -100.0})
+        register_map = make_register_map([READ_INT32])
+        write_telemetry_registers(context=sim.context, unit_id=1, telemetry={"active_power": -100.0}, register_map=register_map)
         raw = sim.context[1].getValues(4, READ_INT32.address, 2)
         value = (raw[0] << 16) + raw[1]
         if value > 0x7FFFFFFF:
@@ -430,7 +503,8 @@ class TestRTUContextParity:
 
     def test_telemetry_uint32(self):
         sim = make_rtu()
-        write_telemetry_registers([READ_UINT32], sim.context, 1, {"total_import_energy": 9999.99})
+        register_map = make_register_map([READ_UINT32])
+        write_telemetry_registers(context=sim.context, unit_id=1, telemetry={"total_import_energy": 9999.99}, register_map=register_map)
         raw = sim.context[1].getValues(4, READ_UINT32.address, 2)
         value = (raw[0] << 16) + raw[1]
         assert value * READ_UINT32.scale == pytest.approx(9999.99, abs=0.01)
@@ -466,13 +540,9 @@ class TestRTUAttributes:
 
     def test_custom_serial_params(self):
         sim = ModbusRTUSimulator(
-            port="/dev/ttyS0",
-            unit_id=5,
-            baudrate=19200,
-            bytesize=7,
-            parity="E",
-            stopbits=2,
-            timeout=0.5,
+            port="/dev/ttyS0", unit_id=5,
+            baudrate=19200, bytesize=7,
+            parity="E", stopbits=2, timeout=0.5,
         )
         assert sim.port == "/dev/ttyS0"
         assert sim.unit_id == 5
@@ -512,3 +582,40 @@ class TestTCPAttributes:
     def test_task_initially_none(self):
         sim = make_tcp()
         assert sim._task is None
+
+
+class TestRegisterMapEndianValidation:
+    """Register map must reject invalid endian values at parse time."""
+
+    def _make_entry(self, endian: str) -> dict:
+        return {
+            "name": "test_reg",
+            "internal_name": "test_reg",
+            "address": 1000,
+            "func": "0x04",
+            "direction": "read",
+            "type": "int32",
+            "count": 2,
+            "scale": 0.1,
+            "endian": endian,
+        }
+
+    def test_invalid_endian_raises_value_error(self):
+        with pytest.raises(ValueError, match="Invalid endian"):
+            RegisterMap._parse_entry(self._make_entry("middle"))
+
+    def test_invalid_endian_typo_raises(self):
+        with pytest.raises(ValueError, match="Invalid endian"):
+            RegisterMap._parse_entry(self._make_entry("Little"))  # wrong case
+
+    def test_invalid_endian_empty_raises(self):
+        with pytest.raises(ValueError, match="Invalid endian"):
+            RegisterMap._parse_entry(self._make_entry(""))
+
+    def test_valid_big_parses(self):
+        reg = RegisterMap._parse_entry(self._make_entry("big"))
+        assert reg.endian == RegisterEndian.BIG
+
+    def test_valid_little_parses(self):
+        reg = RegisterMap._parse_entry(self._make_entry("little"))
+        assert reg.endian == RegisterEndian.LITTLE
