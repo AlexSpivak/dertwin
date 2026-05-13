@@ -14,7 +14,17 @@ def test_temperature_increases_under_load():
         5) Thermal capacity scaling
     """
 
-    battery = BatteryModel(100, initial_soc=50)
+    # Use the pre-auto-scaling thermal values explicitly so that 20 kW for
+    # 1 h reliably exercises the heating-dominates branch (joule > cooling).
+    # With the auto-scaled defaults this load is too gentle — cooling would
+    # dominate and the model's [ambient, 80] clamp would obscure the check.
+    battery = BatteryModel(
+        100,
+        initial_soc=50,
+        internal_resistance=0.05,
+        thermal_capacity_j_per_k=5000.0,
+        thermal_conductance_w_per_k=0.5,
+    )
 
     battery.temperature_c = 30.0
     initial_temp = 30.0
