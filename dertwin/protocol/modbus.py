@@ -7,11 +7,14 @@ from pymodbus.server import StartAsyncTcpServer, StartAsyncSerialServer
 
 logger = logging.getLogger(__name__)
 
+# Full 16-bit Modbus address space: 0x0000–0xFFFF
+_MODBUS_REGISTER_COUNT = 65536
+
 def create_device_context() -> ModbusDeviceContext:
     di_block = ModbusSequentialDataBlock(0, [0] * 100)
     co_block = ModbusSequentialDataBlock(0, [0] * 100)
-    ir_block = ModbusSequentialDataBlock(0, [0] * 40000)
-    hr_block = ModbusSequentialDataBlock(0, [0] * 40000)
+    ir_block = ModbusSequentialDataBlock(0, [0] * _MODBUS_REGISTER_COUNT)
+    hr_block = ModbusSequentialDataBlock(0, [0] * _MODBUS_REGISTER_COUNT)
 
     return ModbusDeviceContext(
         di=di_block,
