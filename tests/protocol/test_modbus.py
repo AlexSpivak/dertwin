@@ -693,3 +693,187 @@ def test_high_address_telemetry_roundtrip():
     )
     raw = sim.context[1].getValues(3, high_addr_reg.address, 1)
     assert raw[0] == 3
+
+
+# ==========================================================
+# DISCRETE INPUTS (FC02)
+# ==========================================================
+
+# Shared discrete input fixtures
+DISCRETE_RUNNING = RegisterDefinition(
+    name="engine_running",
+    internal_name="engine_running",
+    address=10034,
+    func=0x02,
+    direction=RegisterDirection.READ,
+    type="uint16",
+    count=1,
+    scale=1.0,
+)
+
+DISCRETE_FAULT = RegisterDefinition(
+    name="collective_fault",
+    internal_name="collective_fault",
+    address=10029,
+    func=0x02,
+    direction=RegisterDirection.READ,
+    type="uint16",
+    count=1,
+    scale=1.0,
+)
+
+DISCRETE_BREAKER = RegisterDefinition(
+    name="circuit_breaker_closed",
+    internal_name="circuit_breaker_closed",
+    address=10036,
+    func=0x02,
+    direction=RegisterDirection.READ,
+    type="uint16",
+    count=1,
+    scale=1.0,
+)
+
+
+class TestDiscreteInputs:
+    """FC02 discrete inputs must be routed to datastore 2 as single bits."""
+
+    def test_true_bool_written_as_bit_one(self):
+        sim = make_tcp()
+        register_map = make_register_map([DISCRETE_RUNNING])
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={"engine_running": True},
+            register_map=register_map,
+        )
+        raw = sim.context[1].getValues(2, DISCRETE_RUNNING.address, 1)
+        assert raw[0] == 1
+
+    def test_false_bool_written_as_bit_zero(self):
+        sim = make_tcp()
+        register_map = make_register_map([DISCRETE_RUNNING])
+
+        # First write True
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={"engine_running": True},
+            register_map=register_map,
+        )
+        assert sim.context[1].getValues(2, DISCRETE_RUNNING.address, 1)[0] == 1
+
+        # Then write False — must overwrite to 0
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={"engine_running": False},
+            register_map=register_map,
+        )
+        assert sim.context[1].getValues(2, DISCRETE_RUNNING.address, 1)[0] == 0
+
+    def test_integer_truthy_written_as_bit_one(self):
+        sim = make_tcp()
+        register_map = make_register_map([DISCRETE_FAULT])
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={"collective_fault": 1001},  # truthy int
+            register_map=register_map,
+        )
+        raw = sim.context[1].getValues(2, DISCRETE_FAULT.address, 1)
+        assert raw[0] == 1
+
+    def test_integer_zero_written_as_bit_zero(self):
+        sim = make_tcp()
+        register_map = make_register_map([DISCRETE_FAULT])
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={"collective_fault": 0},
+            register_map=register_map,
+        )
+        raw = sim.context[1].getValues(2, DISCRETE_FAULT.address, 1)
+        assert raw[0] == 0
+
+    def test_discrete_inputs_isolated_from_input_registers(self):
+        """A discrete input write must NOT affect the input register datastore at the same address."""
+        sim = make_tcp()
+        register_map = make_register_map([DISCRETE_RUNNING])
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={"engine_running": True},
+            register_map=register_map,
+        )
+        # Bit set in discrete inputs (datastore 2)
+        assert sim.context[1].getValues(2, DISCRETE_RUNNING.address, 1)[0] == 1
+        # Input registers (datastore 4) at the same address must remain untouched
+        assert sim.context[1].getValues(4, DISCRETE_RUNNING.address, 1)[0] == 0
+
+    def test_discrete_inputs_isolated_from_holding_registers(self):
+        """A discrete input write must NOT affect the holding register datastore."""
+        sim = make_tcp()
+        register_map = make_register_map([DISCRETE_FAULT])
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={"collective_fault": True},
+            register_map=register_map,
+        )
+        assert sim.context[1].getValues(2, DISCRETE_FAULT.address, 1)[0] == 1
+        assert sim.context[1].getValues(3, DISCRETE_FAULT.address, 1)[0] == 0
+
+    def test_multiple_discrete_inputs_at_different_addresses(self):
+        sim = make_tcp()
+        register_map = make_register_map([
+            DISCRETE_RUNNING, DISCRETE_FAULT, DISCRETE_BREAKER,
+        ])
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={
+                "engine_running": True,
+                "collective_fault": False,
+                "circuit_breaker_closed": True,
+            },
+            register_map=register_map,
+        )
+        assert sim.context[1].getValues(2, DISCRETE_RUNNING.address, 1)[0] == 1
+        assert sim.context[1].getValues(2, DISCRETE_FAULT.address, 1)[0] == 0
+        assert sim.context[1].getValues(2, DISCRETE_BREAKER.address, 1)[0] == 1
+
+    def test_mixed_discrete_and_input_registers_routed_correctly(self):
+        """A register map with both FC02 and FC04 registers — each goes to its own datastore."""
+        sim = make_tcp()
+        register_map = make_register_map([DISCRETE_RUNNING, READ_UINT16])
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={
+                "engine_running": True,
+                "grid_frequency": 50.0,
+            },
+            register_map=register_map,
+        )
+        # Discrete input at its address in datastore 2
+        assert sim.context[1].getValues(2, DISCRETE_RUNNING.address, 1)[0] == 1
+        # Input register at its address in datastore 4
+        raw = sim.context[1].getValues(4, READ_UINT16.address, 1)
+        assert raw[0] * READ_UINT16.scale == pytest.approx(50.0, abs=0.01)
+
+    def test_missing_discrete_telemetry_key_is_skipped(self):
+        sim = make_tcp()
+        register_map = make_register_map([DISCRETE_RUNNING])
+        write_telemetry_registers(
+            context=sim.context, unit_id=1,
+            telemetry={"unrelated_field": True},
+            register_map=register_map,
+        )
+        # No write happened — discrete input still at default 0
+        raw = sim.context[1].getValues(2, DISCRETE_RUNNING.address, 1)
+        assert raw[0] == 0
+
+    def test_discrete_input_overwrites_previous_value(self):
+        """Sequential writes to the same discrete input must reflect the latest value."""
+        sim = make_tcp()
+        register_map = make_register_map([DISCRETE_RUNNING])
+
+        for value, expected in [(True, 1), (False, 0), (True, 1), (False, 0)]:
+            write_telemetry_registers(
+                context=sim.context, unit_id=1,
+                telemetry={"engine_running": value},
+                register_map=register_map,
+            )
+            raw = sim.context[1].getValues(2, DISCRETE_RUNNING.address, 1)
+            assert raw[0] == expected

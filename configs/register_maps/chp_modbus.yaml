@@ -1,0 +1,419 @@
+protocol: modbus_tcp
+device_type: chp
+description: "Generic CHP (Combined Heat and Power) Modbus register map"
+# Modeled after MWM TEM Evolution / TCG series gas engine controllers.
+# Addresses follow Modicon 5-digit convention:
+#   1xxxx = discrete inputs (FC02)  — single-bit status flags
+#   3xxxx = input registers (FC04)  — read-only telemetry
+#   4xxxx = holding registers (FC03/06/10) — read/write commands
+#
+# Endianness: big-endian (default).
+
+registers:
+
+  # ==========================================================
+  # DISCRETE INPUTS (FC02) — Binary status flags
+  # ==========================================================
+
+  - name: auto_mode
+    internal_name: auto_mode
+    address: 10001
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "0 = Manual, 1 = Auto — unit operating mode"
+
+  - name: engine_running
+    internal_name: engine_running
+    address: 10034
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "1 = Engine is running"
+
+  - name: circuit_breaker_closed
+    internal_name: circuit_breaker_closed
+    address: 10036
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "0 = Open, 1 = Closed — G106 power circuit breaker"
+
+  - name: e_stop_request
+    internal_name: e_stop_request
+    address: 10024
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "E100 external start request (logical input from EMS)"
+
+  - name: collective_warning
+    internal_name: collective_warning
+    address: 10028
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "1 = any warning active"
+
+  - name: collective_fault
+    internal_name: collective_fault
+    address: 10029
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "1 = any fault active"
+
+  - name: power_supply_failure
+    internal_name: power_supply_failure
+    address: 10134
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "E104 main power supply lost"
+
+  - name: ignition_on
+    internal_name: ignition_on
+    address: 10161
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "Ignition system energized"
+
+  - name: starter_on
+    internal_name: starter_on
+    address: 10162
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "Starter motor engaged"
+
+  - name: prelube_pump_on
+    internal_name: prelube_pump_on
+    address: 10164
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "Pre-lubrication pump running"
+
+  - name: preheat_on
+    internal_name: preheat_on
+    address: 10165
+    func: 0x02
+    direction: read
+    type: uint16
+    count: 1
+    description: "Engine pre-heat active"
+
+
+  # ==========================================================
+  # INPUT REGISTERS (FC04) — Analog telemetry
+  # ==========================================================
+
+  # ----------------------
+  # State Machine
+  # ----------------------
+
+  - name: unit_state
+    internal_name: unit_state
+    address: 30279
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ""
+    description: |
+      0 = Fault, 1 = Ready, 2 = Starting, 3 = Idle, 4 = Synchronizing,
+      5 = Running, 6 = Stopping, 7 = Start blocked, 8 = Restart,
+      9 = Reserve, 10 = Oil change, 11 = Auxiliary test, 12 = Ignition test,
+      13 = Speed governor test, 14 = SC shutdown, 15 = Island start,
+      16 = Black start, 17 = Forced pre-lube, 18 = Warmup, 19 = Control test
+
+  # ----------------------
+  # Power
+  # ----------------------
+
+  - name: actual_power_percent
+    internal_name: actual_power_percent
+    address: 30226
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: "%"
+    description: "E198.2 actual power as % of rated"
+
+  - name: actual_power_kw
+    internal_name: actual_power_kw
+    address: 30227
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.01
+    unit: kW
+    description: "Actual electrical power output in kW (DERTwin computed)"
+
+  - name: permitted_power_percent
+    internal_name: permitted_power_percent
+    address: 30230
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: "%"
+    description: "E198.6 permitted power as % of rated (derating)"
+
+  - name: heat_power_kw
+    internal_name: heat_power_kw
+    address: 30231
+    func: 0x04
+    direction: read
+    type: int32
+    count: 2
+    scale: 0.01
+    unit: kW
+    description: "Thermal output power in kW (DERTwin computed)"
+
+  # ----------------------
+  # Engine
+  # ----------------------
+
+  - name: engine_speed_rpm
+    internal_name: engine_speed_rpm
+    address: 30223
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: rpm
+    description: "S200 engine speed"
+
+  - name: throttle_position
+    internal_name: throttle_position
+    address: 30222
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: "%"
+    description: "G197 throttle valve position"
+
+  # ----------------------
+  # Temperatures
+  # ----------------------
+
+  - name: coolant_outlet_temp
+    internal_name: coolant_outlet_temp
+    address: 30241
+    func: 0x04
+    direction: read
+    type: int16
+    count: 1
+    scale: 0.1
+    unit: degC
+    description: "T206 coolant water outlet from engine"
+
+  - name: coolant_inlet_temp
+    internal_name: coolant_inlet_temp
+    address: 30242
+    func: 0x04
+    direction: read
+    type: int16
+    count: 1
+    scale: 0.1
+    unit: degC
+    description: "T207 coolant water inlet to engine"
+
+  - name: exhaust_temp_after_catalyst
+    internal_name: exhaust_temp_after_catalyst
+    address: 30237
+    func: 0x04
+    direction: read
+    type: int16
+    count: 1
+    scale: 1
+    unit: degC
+    description: "T287 exhaust gas temperature after catalyst"
+
+  - name: oil_temperature
+    internal_name: oil_temperature
+    address: 30205
+    func: 0x04
+    direction: read
+    type: int16
+    count: 1
+    scale: 0.1
+    unit: degC
+    description: "T208 engine oil temperature"
+
+  - name: intake_air_temp
+    internal_name: intake_air_temp
+    address: 30214
+    func: 0x04
+    direction: read
+    type: int16
+    count: 1
+    scale: 0.1
+    unit: degC
+    description: "T203 intake air temperature"
+
+  # ----------------------
+  # Pressures
+  # ----------------------
+
+  - name: oil_pressure
+    internal_name: oil_pressure
+    address: 30203
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.01
+    unit: bar
+    description: "P196 oil pressure before filter"
+
+  - name: charge_pressure
+    internal_name: charge_pressure
+    address: 30246
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 0.01
+    unit: bar
+    description: "P268 charge pressure"
+
+  # ----------------------
+  # Operating Statistics
+  # ----------------------
+  # Note: MWM convention splits counters across two registers
+  #   {value}_low  = value % 10000
+  #   {value}_high = value // 10000
+  # EMS reconstructs total as: high * 10000 + low
+
+  - name: operating_hours
+    internal_name: operating_hours
+    address: 30284
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: h
+    description: "Operating hours, modulo 10000 (combine with operating_hours_10000)"
+
+  - name: operating_hours_10000
+    internal_name: operating_hours_10000
+    address: 30285
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: h
+    description: "Operating hours / 10000 (high part)"
+
+  - name: start_counter
+    internal_name: start_counter
+    address: 30282
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ""
+    description: "Start counter, modulo 10000"
+
+  - name: start_counter_10000
+    internal_name: start_counter_10000
+    address: 30283
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ""
+    description: "Start counter / 10000 (high part)"
+
+
+  # ==========================================================
+  # HOLDING REGISTERS (FC03/06/10) — Commands
+  # ==========================================================
+
+  # ----------------------
+  # Start/Stop
+  # ----------------------
+  # NOTE: real TEM Evolution units use a digital input for start/stop, not Modbus.
+  # This is a DERTwin-simulator-specific register so the EMS can drive the
+  # state machine over Modbus. In production, route start/stop via your
+  # gateway's relay output or contact closure to the controller's DI.
+
+  - name: start_stop
+    internal_name: start_stop
+    address: 41001
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    description: "0 = stop, 1 = start (DERTwin-simulator register)"
+    options:
+      0: Stop
+      1: Start
+
+  # ----------------------
+  # Power Setpoint
+  # ----------------------
+
+  - name: power_setpoint
+    internal_name: power_setpoint_percent
+    address: 41025
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    scale: 0.1
+    unit: "%"
+    description: "Active power setpoint, 0 to 1100 (0–110%) of rated"
+
+  # ----------------------
+  # Remote Acknowledgment / Reset
+  # ----------------------
+
+  - name: remote_acknowledgment
+    internal_name: remote_acknowledgment
+    address: 41030
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    description: "Write 10E1h (4321) to acknowledge faults / reset warnings"
+
+  # ----------------------
+  # Parameterizable Regulator
+  # ----------------------
+
+  - name: parameterizable_regulator_setpoint
+    internal_name: parameterizable_regulator_setpoint
+    address: 41031
+    func: 0x06
+    direction: write
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ""
+    description: "Regulator 1 setpoint (parameterizable per asset)"
