@@ -210,8 +210,11 @@ class TestEncodeValue:
 def test_create_device_context():
     ctx = create_device_context()
     assert ctx is not None
-    assert ctx.getValues(4, 0, 1) == [0]   # input registers
-    assert ctx.getValues(3, 0, 1) == [0]   # holding registers
+    assert ctx.getValues(4, 0, 1) == [0]        # input registers — low address
+    assert ctx.getValues(3, 0, 1) == [0]        # holding registers — low address
+    assert ctx.getValues(4, 65000, 1) == [0]    # input registers — EMS range
+    assert ctx.getValues(3, 65000, 1) == [0]    # holding registers — EMS range
+    assert ctx.getValues(3, 65534, 1) == [0]    # holding registers — max accessible address that can be validated by pymodbus (65535 is rejected)
 
 
 # ==========================================================
@@ -619,3 +622,74 @@ class TestRegisterMapEndianValidation:
     def test_valid_little_parses(self):
         reg = RegisterMap._parse_entry(self._make_entry("little"))
         assert reg.endian == RegisterEndian.LITTLE
+
+
+# ==========================================================
+# BUG FIXES — register bank selection and address space
+# ==========================================================
+
+def test_write_telemetry_respects_func_field():
+    """
+    Telemetry must be written to the register bank declared by reg.func,
+    not hardcoded to input registers (FC=4).
+    """
+    holding_reg = RegisterDefinition(
+        name="system_soc",
+        internal_name="system_soc",
+        address=2505,
+        func=0x03,
+        direction=RegisterDirection.READ,
+        type="uint16",
+        count=1,
+        scale=0.1,
+    )
+    input_reg = RegisterDefinition(
+        name="grid_frequency",
+        internal_name="grid_frequency",
+        address=2512,
+        func=0x04,
+        direction=RegisterDirection.READ,
+        type="uint16",
+        count=1,
+        scale=0.01,
+    )
+    sim = make_tcp()
+    register_map = make_register_map([holding_reg, input_reg])
+    write_telemetry_registers(
+        context=sim.context,
+        unit_id=1,
+        telemetry={"system_soc": 65.0, "grid_frequency": 50.0},
+        register_map=register_map,
+    )
+
+    # system_soc (FC=3): must be in holding registers, not input registers
+    assert sim.context[1].getValues(3, 2505, 1) == [650]   # 65.0 / 0.1
+    assert sim.context[1].getValues(4, 2505, 1) == [0]     # input reg must be untouched
+
+    # grid_frequency (FC=4): must be in input registers
+    assert sim.context[1].getValues(4, 2512, 1) == [5000]  # 50.0 / 0.01
+    assert sim.context[1].getValues(3, 2512, 1) == [0]     # holding reg must be untouched
+
+
+def test_high_address_telemetry_roundtrip():
+    """Registers above 40 000 must accept writes and return correct values."""
+    high_addr_reg = RegisterDefinition(
+        name="ems_working_status",
+        internal_name="ems_working_status",
+        address=65000,
+        func=0x03,
+        direction=RegisterDirection.READ,
+        type="uint16",
+        count=1,
+        scale=1.0,
+    )
+    sim = make_tcp()
+    register_map = make_register_map([high_addr_reg])
+    write_telemetry_registers(
+        context=sim.context,
+        unit_id=1,
+        telemetry={"ems_working_status": 3.0},
+        register_map=register_map,
+    )
+    raw = sim.context[1].getValues(3, high_addr_reg.address, 1)
+    assert raw[0] == 3

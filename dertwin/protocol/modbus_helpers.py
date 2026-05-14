@@ -22,7 +22,7 @@ def write_telemetry_registers(context, unit_id: int, telemetry: dict, register_m
                 count=reg_def.count,
                 endian=reg_def.endian,
             )
-            context[unit_id].setValues(4, reg_def.address, words)
+            context[unit_id].setValues(reg_def.func, reg_def.address, words)
         except Exception as e:
             logger.warning("Failed to write telemetry register %s: %s", reg_def.name, e)
 
