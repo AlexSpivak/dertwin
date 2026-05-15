@@ -139,3 +139,20 @@ def test_re_enable_recovers_with_ramp():
     inverter.step(dc_input_w=4000, dt=1.0)
 
     assert inverter.active_power_w > 0.0
+
+
+def test_ramp_down_never_goes_negative():
+    """When DC input drops to zero, active_power must not undershoot below 0."""
+    inverter = PVInverterModel(rated_ac_power_w=5000)
+
+    # Ramp up to full power
+    run_until_settled(inverter, dc_input_w=5000, steps=50, dt=1.0)
+    assert inverter.active_power_w > 4000  # should be near rated
+
+    # Suddenly drop DC to zero — ramp dynamics might overshoot
+    for _ in range(100):
+        inverter.step(dc_input_w=0, dt=1.0)
+
+    assert inverter.active_power_w >= 0.0, (
+        f"active_power_w went negative: {inverter.active_power_w}"
+    )
