@@ -9,6 +9,7 @@ from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap
 
 from dertwin.devices.bess.simulator import BESSSimulator
+from dertwin.devices.chp.simulator import CHPSimulator
 from dertwin.devices.pv.simulator import PVSimulator
 from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
 
@@ -217,6 +218,17 @@ class SiteController:
                 grid_voltage_model=self.external_models.grid_voltage_model,
                 grid_frequency_model=self.external_models.grid_frequency_model,
                 irradiance_model=self.external_models.irradiance_model,
+            )
+
+        if dtype == "chp":
+            return CHPSimulator(
+                rated_kw=asset_cfg.get("rated_kw", 4000.0),
+                heat_to_power_ratio=asset_cfg.get("heat_to_power_ratio", 1.0),
+                min_load_percent=asset_cfg.get("min_load_percent", 30.0),
+                max_load_percent=asset_cfg.get("max_load_percent", 110.0),
+                ambient_temp_model=self.external_models.ambient_temperature_model,
+                grid_voltage_model=self.external_models.grid_voltage_model,
+                grid_frequency_model=self.external_models.grid_frequency_model,
             )
 
         raise ValueError(f"Unknown or unsupported asset type: {dtype}")

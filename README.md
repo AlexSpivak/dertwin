@@ -2,7 +2,7 @@
 
 Digital Twin infrastructure for modern energy systems.
 
-**DER Twin** is a lightweight simulator for Distributed Energy Resources (DER) — BESS, PV inverters, energy meters, and grid models — exposed via Modbus TCP and Modbus RTU. Use it for EMS development, protocol testing, integration validation, and control algorithm sandboxing without touching real hardware.
+**DER Twin** is a lightweight simulator for Distributed Energy Resources (DER) — BESS, PV inverters, CHP units, energy meters, and grid models — exposed via Modbus TCP and Modbus RTU. Use it for EMS development, protocol testing, integration validation, and control algorithm sandboxing without touching real hardware.
 
 ---
 
@@ -72,13 +72,15 @@ You'll see the EMS connecting over Modbus and cycling the BESS between 40–60% 
 [EMS] Reached 60% → switching to DISCHARGE
 ```
 
-For a full multi-device site (dual BESS + PV + energy meter + external models):
+For a full multi-device site (dual BESS + PV + CHP + energy meter + external models):
 
 ```bash
 python -m dertwin.main -c configs/full_site_config.json
 # in another terminal:
 python examples/main_full.py
 ```
+
+You'll see the CHP go through its realistic startup sequence (~2 minutes) before reaching `RUNNING` and dispatching power, while the BESS units cycle and the energy meter aggregates the full site balance.
 
 For a mixed-protocol site (BESS on TCP + PV and meter on RTU), see [Mixed Protocol Example](#-mixed-protocol-example-tcp--rtu) below.
 
@@ -88,6 +90,10 @@ For a mixed-protocol site (BESS on TCP + PV and meter on RTU), see [Mixed Protoc
 
 - Async Modbus TCP and RTU servers built on `pymodbus`
 - Mixed-protocol support — TCP and RTU devices on the same site
+- Full 16-bit Modbus address space on all four datastores (discrete inputs, coils, input registers, holding registers)
+- Per-register function code routing — FC02 discrete inputs for binary flags, FC03/04 for analog telemetry
+- Per-register endianness — big-endian default, little-endian for Sungrow/Carlo Gavazzi-style devices
+- Realistic CHP simulation — MWM TEM Evolution-compatible state machine, configurable startup timings, thermal physics, heat output
 - Config-driven site topology — add devices by editing JSON
 - Irradiance, ambient temperature, grid frequency, and grid voltage models
 - Multi-device support across independent ports
@@ -106,19 +112,19 @@ dertwin/
 ├── configs/
 │   ├── register_maps/              # Modbus register definitions (YAML)
 │   ├── simple_config.json          # Single BESS — good starting point
-│   ├── demo_config.json            # Full three-device site
-│   ├── full_site_config.json       # Dual BESS + PV + meter + external models
+│   ├── demo_config.json            # BESS + PV + meter
+│   ├── full_site_config.json       # BESS + BESS + PV + CHP + meter + external models
 │   └── mixed_protocol_config.json  # BESS (TCP) + PV (RTU) + meter (RTU)
 ├── dertwin/
 │   ├── core/                # Clock, engine, register map loader
 │   ├── controllers/         # Site and device orchestration
-│   ├── devices/             # BESS, PV, energy meter, external models
+│   ├── devices/             # BESS, PV, CHP, energy meter, external models
 │   ├── protocol/            # Modbus TCP + RTU servers
 │   ├── telemetry/           # Telemetry dataclasses
 │   └── main.py
 ├── examples/
 │   ├── simple/              # Single BESS EMS example
-│   ├── full/                # Multi-device EMS example (TCP)
+│   ├── full/                # Multi-device EMS example with CHP (TCP)
 │   ├── mixed/               # Mixed-protocol EMS example (TCP + RTU)
 │   └── protocol/            # Shared Modbus TCP and RTU clients
 ├── tests/                   # Full test suite
@@ -150,16 +156,33 @@ Sites are defined in JSON. Each asset declares its type, parameters, and protoco
       "capacity_kwh": 100.0,
       "initial_soc": 60.0,
       "protocols": [{ "kind": "modbus_tcp", "ip": "0.0.0.0", "port": 55001, "unit_id": 1, "register_map": "bess_modbus.yaml" }]
+    },
+    {
+      "type": "chp",
+      "rated_kw": 4000.0,
+      "heat_to_power_ratio": 1.0,
+      "min_load_percent": 30.0,
+      "max_load_percent": 110.0,
+      "protocols": [{ "kind": "modbus_tcp", "ip": "0.0.0.0", "port": 55002, "unit_id": 1, "register_map": "chp_modbus.yaml" }]
     }
   ]
 }
 ```
 
-**`real_time: true`** — engine runs its own loop, use for `dertwin` CLI and EMS examples  
-**`real_time: false`** — caller drives the clock via `step_once()`, use for tests  
-**`start_time_h`** — sets simulation clock on startup (e.g. `12.0` for noon). All external models start from this time.  
-**`register_map_root`** — path to register map directory, resolved relative to the working directory where you run `dertwin`  
+**`real_time: true`** — engine runs its own loop, use for `dertwin` CLI and EMS examples
+**`real_time: false`** — caller drives the clock via `step_once()`, use for tests
+**`start_time_h`** — sets simulation clock on startup (e.g. `12.0` for noon). All external models start from this time.
+**`register_map_root`** — path to register map directory, resolved relative to the working directory where you run `dertwin`
 **`ip: "0.0.0.0"`** — required when running inside Docker so port mapping works. Use `127.0.0.1` for local-only.
+
+### Supported asset types
+
+| `type` | Class | Notable parameters |
+|---|---|---|
+| `bess` | `BESSSimulator` | `capacity_kwh`, `initial_soc`, `max_charge_kw`, `max_discharge_kw`, `ramp_rate_kw_per_s` |
+| `inverter` | `PVSimulator` | `rated_kw`, `module_efficiency`, `area_m2` |
+| `chp` | `CHPSimulator` | `rated_kw`, `heat_to_power_ratio`, `min_load_percent`, `max_load_percent` |
+| `energy_meter` | `EnergyMeterSimulator` | (no parameters — observes the site power model) |
 
 ### Protocol Configuration
 
@@ -183,12 +206,13 @@ RTU parameters `baudrate`, `parity`, `stopbits`, `bytesize`, and `timeout` all h
 |---|---|---|
 | `name` | yes | Human-readable label, used in logs and the EMS client |
 | `internal_name` | yes | Maps to the device's internal telemetry or command field — must match the attribute name in the corresponding telemetry class (see [`dertwin/telemetry/README.md`](dertwin/telemetry/README.md)) |
-| `address` | yes | Modbus register address |
+| `address` | yes | Modbus register address (0–65535) |
 | `type` | yes | `uint16`, `int16`, `uint32`, `int32` |
 | `scale` | yes | Multiplier applied on read, divisor applied on write |
 | `count` | yes | Number of registers (1 for 16-bit, 2 for 32-bit) |
-| `func` | yes | Function code: `0x04` input read, `0x03` holding read, `0x06` single write, `0x10` multi-register write |
+| `func` | yes | Function code: `0x02` discrete input read, `0x03` holding read, `0x04` input read, `0x06` single write, `0x10` multi-register write |
 | `direction` | yes | `read` or `write` |
+| `endian` | no | `big` (default) or `little` — for devices like Sungrow BESS and Carlo Gavazzi meters that use little-endian 32-bit register layout |
 | `unit` | no | Physical unit label (V, kW, Hz, etc.) |
 | `description` | no | Free-text note |
 | `options` | no | Enum mapping for status/mode registers |
@@ -320,31 +344,6 @@ cd examples
 python main_mixed.py
 ```
 
-Expected output:
-```
-[BESS-1] TCP connected
-[PV] RTU connected
-[METER] RTU connected
-[BESS-1] Starting in CHARGE mode
-
-[EMS] Mixed-protocol EMS running
-  [BESS-1] RUN  | SOC= 50.0% | P= -30.00 kW | MODE=charge
-  [PV]    P= 16.40 kW (producing)
-  [METER] Grid= +23.57 kW (importing) | Freq=50.000 Hz | Import=0.1 kWh | Export=0.0 kWh
-```
-
-The data flow for each RTU device:
-
-```
-EMS (host)
-  └─ SimpleModbusRTUClient opens /tmp/dertwin_pv_client (PTY)
-       └─ socat on host: PTY ↔ TCP :56001
-            └─ Docker port forward
-                 └─ Python relay in container: TCP ↔ /tmp/dertwin_pv_bridge (PTY)
-                      └─ socat pair: /tmp/dertwin_pv_bridge ↔ /tmp/dertwin_pv
-                           └─ ModbusRTUSimulator
-```
-
 The EMS uses the exact same config for both local and Docker setups — the serial paths (`/tmp/dertwin_pv_client`, `/tmp/dertwin_meter_client`) are identical. The only difference is how those paths are created: locally via direct socat pairs, or via Docker with TCP bridging.
 
 ### Override config at runtime
@@ -365,7 +364,7 @@ docker run \
 pytest
 ```
 
-The test suite covers device physics, register encoding, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, and full end-to-end site integration via Modbus. See `tests/` for structure.
+The test suite covers device physics (BESS, PV, CHP, energy meter), register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, and full end-to-end site integration via Modbus. See `tests/` for structure.
 
 ---
 
@@ -375,6 +374,9 @@ The test suite covers device physics, register encoding, external models, protoc
 - [ ] REST API + web dashboard
 - [ ] IEC 61850 support
 - [ ] MQTT integration
+- [x] CHP support with realistic state machine
+- [x] Modbus FC02 discrete input support
+- [x] Per-register endianness (big/little)
 - [x] Modbus RTU support
 - [x] Mixed-protocol sites (TCP + RTU)
 - [x] Docker RTU-over-TCP bridging
@@ -390,6 +392,7 @@ The test suite covers device physics, register encoding, external models, protoc
 - DER fleet orchestration prototyping
 - Frequency and voltage response simulation
 - Mixed-protocol site simulation
+- CHP dispatch and startup-sequence testing against EMS
 
 ---
 

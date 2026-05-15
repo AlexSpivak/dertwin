@@ -69,17 +69,16 @@ class ExternalModels:
             self.irradiance_model.update(sim_time, dt)
 
     @staticmethod
-    def build_power_model(devices_by_type, config = None):
-        base_load = 5.0
+    def build_power_model(devices_by_type, config=None):
+        base_load = 5.0  # default 5 kW
         if config:
-            base_load = config.get("power", {}).get("base_load_w")
-            if base_load:
-                base_load = float(base_load) / 1000.0
-            else:
-                base_load = 5.0  # default 5 kW
+            cfg_base_load = config.get("power", {}).get("base_load_w")
+            if cfg_base_load is not None:
+                base_load = float(cfg_base_load) / 1000.0  # W -> kW
 
         bess_devices = devices_by_type.get("bess", [])
         pv_devices = devices_by_type.get("inverter", [])
+        chp_devices = devices_by_type.get("chp", [])
 
         return SitePowerModel(
             base_load_supplier=lambda t: base_load,
@@ -90,6 +89,10 @@ class ExternalModels:
             bess_supplier=lambda: sum(
                 b.get_telemetry().active_power
                 for b in bess_devices
+            ),
+            chp_supplier=lambda: sum(
+                c.get_telemetry().actual_power_kw
+                for c in chp_devices
             ),
         )
 
