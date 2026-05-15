@@ -52,7 +52,6 @@ class SiteController:
     def build(self) -> None:
         logger.info("Building site: %s", self.config.get("site_name", "unnamed"))
 
-
         if self.config.get("external_models"):
             self.external_models = ExternalModels.from_config(self.config.get("external_models"))
         else:
@@ -61,31 +60,38 @@ class SiteController:
         devices_by_type: Dict[str, List] = {}
         devices: List = []
 
-        # Create devices
-        for asset in [a for a in self.config["assets"] if a["type"] != "energy_meter"]:
+        # Track asset config ↔ device pairs to avoid zip misalignment
+        # when energy meters are not last in the config
+        asset_device_pairs: List[tuple] = []
+
+        # First pass: create non-meter devices
+        for asset in self.config["assets"]:
+            if asset["type"] == "energy_meter":
+                continue
             device = self._create_device(asset)
             devices.append(device)
             devices_by_type.setdefault(asset["type"], []).append(device)
+            asset_device_pairs.append((asset, device))
 
-        self.external_models.power_model = ExternalModels.build_power_model(devices_by_type, self.config.get("external_models"))
+        self.external_models.power_model = ExternalModels.build_power_model(
+            devices_by_type, self.config.get("external_models")
+        )
 
-
-        # ------------------------------------------------------
-        # Create Energy Meters
-        # ------------------------------------------------------
-
-        for _ in [a for a in self.config["assets"] if a["type"] == "energy_meter"]:
+        # Second pass: create energy meters (need power model)
+        for asset in self.config["assets"]:
+            if asset["type"] != "energy_meter":
+                continue
             meter = EnergyMeterSimulator(
                 power_model=self.external_models.power_model,
                 grid_model=self.external_models.grid_frequency_model,
                 grid_voltage_model=self.external_models.grid_voltage_model,
             )
-
             devices.append(meter)
             devices_by_type.setdefault("energy_meter", []).append(meter)
+            asset_device_pairs.append((asset, meter))
 
-        # Create controllers + protocols
-        for asset, device in zip(self.config["assets"], devices):
+        # Create controllers + protocols from correctly paired list
+        for asset, device in asset_device_pairs:
 
             for proto_cfg in asset.get("protocols", []):
 
