@@ -6,14 +6,9 @@ class SitePowerModel:
     Pure deterministic site-level power balance model.
 
     Responsibilities:
-    - Aggregate load, PV and BESS
+    - Aggregate load, PV, BESS, and CHP
     - Compute net grid power
     - Integrate import/export energy
-
-    All supplier callables must return values in kW:
-        - base_load_supplier(sim_time) -> kW
-        - pv_supplier()               -> kW
-        - bess_supplier()             -> kW  (positive = discharge)
     """
 
     def __init__(
@@ -21,12 +16,14 @@ class SitePowerModel:
         base_load_supplier: Callable[[float], float],
         pv_supplier: Optional[Callable[[], float]] = None,
         bess_supplier: Optional[Callable[[], float]] = None,
+        chp_supplier: Optional[Callable[[], float]] = None,
     ):
         self._sim_time = 0.0
 
         self.base_load_supplier = base_load_supplier
         self.pv_supplier = pv_supplier
         self.bess_supplier = bess_supplier
+        self.chp_supplier = chp_supplier
 
         self.grid_power_kw = 0.0
 
@@ -43,9 +40,11 @@ class SitePowerModel:
         base_load_kw = self.base_load_supplier(self._sim_time)
         pv_kw = self.pv_supplier() if self.pv_supplier else 0.0
         bess_kw = self.bess_supplier() if self.bess_supplier else 0.0
+        chp_kw = self.chp_supplier() if self.chp_supplier else 0.0
 
         # Positive = import, Negative = export
-        self.grid_power_kw = base_load_kw - pv_kw - bess_kw
+        # All generators (PV, BESS discharge, CHP) reduce grid import
+        self.grid_power_kw = base_load_kw - pv_kw - bess_kw - chp_kw
 
         if abs(self.grid_power_kw) < 1e-9:
             self.grid_power_kw = 0.0

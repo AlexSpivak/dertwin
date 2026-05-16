@@ -29,9 +29,19 @@
       "register_map": "configs/register_maps/pv_inverter_modbus.yaml"
     },
     {
-      "type": "energy_meter",
+      "type": "chp",
+      "name": "CHP-1",
       "host": "localhost",
       "port": 55004,
+      "unit_id": 1,
+      "rated_kw": 4000.0,
+      "dispatch_setpoint_percent": 60.0,
+      "register_map": "configs/register_maps/chp_modbus.yaml"
+    },
+    {
+      "type": "energy_meter",
+      "host": "localhost",
+      "port": 55005,
       "unit_id": 1,
       "register_map": "configs/register_maps/energy_meter_modbus.yaml"
     }

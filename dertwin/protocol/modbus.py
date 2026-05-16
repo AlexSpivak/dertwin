@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 _MODBUS_REGISTER_COUNT = 65536
 
 def create_device_context() -> ModbusDeviceContext:
-    di_block = ModbusSequentialDataBlock(0, [0] * 100)
-    co_block = ModbusSequentialDataBlock(0, [0] * 100)
+    di_block = ModbusSequentialDataBlock(0, [0] * _MODBUS_REGISTER_COUNT)
+    co_block = ModbusSequentialDataBlock(0, [0] * _MODBUS_REGISTER_COUNT)
     ir_block = ModbusSequentialDataBlock(0, [0] * _MODBUS_REGISTER_COUNT)
     hr_block = ModbusSequentialDataBlock(0, [0] * _MODBUS_REGISTER_COUNT)
 

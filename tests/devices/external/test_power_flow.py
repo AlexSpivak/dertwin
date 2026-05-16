@@ -160,5 +160,94 @@ class TestSitePowerModel(unittest.TestCase):
         self.assertGreaterEqual(model.import_energy_kwh, 0.0)
 
 
+# ==========================================================
+# CHP TESTS
+# ==========================================================
+
+class TestSitePowerModelCHP(unittest.TestCase):
+    """CHP generation reduces grid import the same way PV and BESS discharge do."""
+
+    def constant_load(self, value_kw):
+        return lambda t: value_kw
+
+    def constant_kw(self, value_kw):
+        return lambda: value_kw
+
+    def test_chp_only_export(self):
+        """CHP generating into a zero-load site → pure export."""
+        model = SitePowerModel(
+            base_load_supplier=self.constant_load(0.0),
+            chp_supplier=self.constant_kw(2400.0),
+        )
+        model.update(3600.0)
+        self.assertAlmostEqual(model.grid_power_kw, -2400.0)
+        self.assertAlmostEqual(model.export_energy_kwh, 2400.0)
+        self.assertAlmostEqual(model.import_energy_kwh, 0.0)
+
+    def test_chp_offsets_load(self):
+        """CHP partially offsets load → reduced import."""
+        model = SitePowerModel(
+            base_load_supplier=self.constant_load(100.0),
+            chp_supplier=self.constant_kw(60.0),
+        )
+        model.update(3600.0)
+        self.assertAlmostEqual(model.grid_power_kw, 40.0)
+        self.assertAlmostEqual(model.import_energy_kwh, 40.0)
+
+    def test_chp_overproduces_load(self):
+        """CHP overproduction → export."""
+        model = SitePowerModel(
+            base_load_supplier=self.constant_load(1000.0),
+            chp_supplier=self.constant_kw(2400.0),
+        )
+        model.update(3600.0)
+        self.assertAlmostEqual(model.grid_power_kw, -1400.0)
+        self.assertAlmostEqual(model.export_energy_kwh, 1400.0)
+
+    def test_chp_with_pv_and_bess(self):
+        """All three generators combine to offset load."""
+        model = SitePowerModel(
+            base_load_supplier=self.constant_load(100.0),
+            pv_supplier=self.constant_kw(30.0),
+            bess_supplier=self.constant_kw(20.0),     # 20 kW discharge
+            chp_supplier=self.constant_kw(40.0),
+        )
+        model.update(3600.0)
+        # 100 - 30 - 20 - 40 = 10 kW import
+        self.assertAlmostEqual(model.grid_power_kw, 10.0)
+        self.assertAlmostEqual(model.import_energy_kwh, 10.0)
+
+    def test_chp_charging_bess_with_excess(self):
+        """CHP overproduces while BESS charges — net should still balance correctly."""
+        model = SitePowerModel(
+            base_load_supplier=self.constant_load(50.0),
+            bess_supplier=self.constant_kw(-30.0),    # 30 kW charging
+            chp_supplier=self.constant_kw(100.0),
+        )
+        model.update(3600.0)
+        # 50 - (-30) - 100 = 50 + 30 - 100 = -20 kW (export)
+        self.assertAlmostEqual(model.grid_power_kw, -20.0)
+        self.assertAlmostEqual(model.export_energy_kwh, 20.0)
+
+    def test_chp_zero_when_not_running(self):
+        """CHP supplier returning 0 (idle/ready state) behaves as if absent."""
+        model = SitePowerModel(
+            base_load_supplier=self.constant_load(50.0),
+            chp_supplier=self.constant_kw(0.0),
+        )
+        model.update(3600.0)
+        self.assertAlmostEqual(model.grid_power_kw, 50.0)
+        self.assertAlmostEqual(model.import_energy_kwh, 50.0)
+
+    def test_chp_supplier_optional(self):
+        """SitePowerModel works without chp_supplier (backward compatibility)."""
+        model = SitePowerModel(
+            base_load_supplier=self.constant_load(10.0),
+            pv_supplier=self.constant_kw(4.0),
+            # no chp_supplier
+        )
+        model.update(3600.0)
+        self.assertAlmostEqual(model.grid_power_kw, 6.0)
+
 if __name__ == "__main__":
     unittest.main()

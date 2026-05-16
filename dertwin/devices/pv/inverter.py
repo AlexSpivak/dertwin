@@ -113,6 +113,7 @@ class PVInverterModel:
             delta = math.copysign(max_delta, delta)
 
         self.active_power_w += delta
+        self.active_power_w = max(0.0, self.active_power_w)  # PV can't go negative
         self._target_active_power_w = target
 
         # Reactive power from PF

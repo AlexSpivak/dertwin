@@ -1,6 +1,6 @@
 # External Simulation Models for DER Systems
 
-This package provides deterministic **external world models** for simulating distributed energy resources (DER) such as PV inverters, battery energy storage systems (BESS), and grid-connected sites. It includes ambient conditions, irradiance, grid frequency and voltage, and site-level power flow models.  
+This package provides deterministic **external world models** for simulating distributed energy resources (DER) such as PV inverters, battery energy storage systems (BESS), combined heat and power units (CHP), and grid-connected sites. It includes ambient conditions, irradiance, grid frequency and voltage, and site-level power flow models.
 
 All models are designed to be **deterministic**, fully **simulation-time driven**, and **modular**, allowing flexible integration into DER simulations.
 
@@ -9,7 +9,6 @@ All models are designed to be **deterministic**, fully **simulation-time driven*
 ## Table of Contents
 
 - [Features](#features)
-- [Installation](#installation)
 - [Modules](#modules)
   - [ambient_temperature.py](#ambient_temperaturepy)
   - [irradiance.py](#irradiancepy)
@@ -18,7 +17,6 @@ All models are designed to be **deterministic**, fully **simulation-time driven*
   - [power_flow.py](#power_flowpy)
   - [external_models.py](#external_modelspy)
 - [Usage Example](#usage-example)
-- [License](#license)
 
 ---
 
@@ -27,7 +25,7 @@ All models are designed to be **deterministic**, fully **simulation-time driven*
 - **Ambient conditions:** Deterministic daily temperature profiles
 - **Solar irradiance:** Clear-sky sinusoidal irradiance curves
 - **Grid frequency & voltage:** Drift, noise, events, and deterministic disturbances
-- **Site power flow:** Aggregates load, PV, and BESS contributions
+- **Site power flow:** Aggregates load, PV, BESS, and CHP contributions
 - **Deterministic update cycle:** External models update before devices in simulation
 - **Configurable defaults:** Parameters such as nominal voltage, frequency, irradiance, and temperature
 
@@ -95,7 +93,7 @@ add_event(event: FrequencyEvent)
 clear_events()
 ```
 
-**Constant variant**: ConstantGridFrequencyModel returns a fixed frequency.
+**Constant variant**: `ConstantGridFrequencyModel` returns a fixed frequency.
 
 ### `grid_voltage.py`
 
@@ -118,19 +116,20 @@ add_event(event: VoltageEvent)
 clear_events()
 ```
 
-**Constant variant**: ConstantGridVoltageModel returns a fixed voltage.
+**Constant variant**: `ConstantGridVoltageModel` returns a fixed voltage.
 
 ### `power_flow.py`
 
 **Class:** `SitePowerModel`
 
-Simulates **site-level power balance** including load, PV generation, and BESS.
+Simulates **site-level power balance** including load, PV, BESS, and CHP generation.
 
 **Features:**
-- Aggregates base load, PV, and BESS contributions
-- Computes net grid power
+- Aggregates base load, PV, BESS, and CHP contributions
+- Computes net grid power (positive = import, negative = export)
 - Tracks import/export energy over time
 - Fully deterministic
+- All generator suppliers are optional — works with any subset of device types
 
 **Key methods:**
 ```python
@@ -141,13 +140,22 @@ get_sim_time() -> float
 **Usage:**
 ```python
 model = SitePowerModel(
-    base_load_supplier=lambda t: 5.0,
+    base_load_supplier=lambda t: 50.0,
     pv_supplier=lambda: 10.0,
-    bess_supplier=lambda: -2.0
+    bess_supplier=lambda: -2.0,      # negative = charging, positive = discharging
+    chp_supplier=lambda: 30.0,
 )
 model.update(dt=60)
-grid_power = model.grid_power_kw
+grid_power = model.grid_power_kw   # 50 - 10 - (-2) - 30 = 12 kW import
 ```
+
+**Sign conventions:**
+- `base_load_supplier(t)` → site load in kW (always positive)
+- `pv_supplier()` → PV generation in kW (always non-negative)
+- `bess_supplier()` → BESS power in kW; **positive = discharge** (acts as generator), **negative = charge** (acts as load)
+- `chp_supplier()` → CHP generation in kW (always non-negative)
+
+The energy meter observes the resulting `grid_power_kw` — it does not need to know which device types contributed to it.
 
 ### `external_models.py`
 
@@ -173,6 +181,8 @@ build_default()
 from_config(config: Dict)
 ```
 
+`build_power_model` automatically wires up `pv_supplier`, `bess_supplier`, and `chp_supplier` based on the device types present in the site, summing `total_active_power` from PV, `active_power` from BESS, and `actual_power_kw` from CHP.
+
 **Usage:**
 ```python
 from dertwin.devices.external.external_models import ExternalModels
@@ -195,7 +205,7 @@ external = ExternalModels(ambient_temperature_model=atm)
 # Simulate
 for t in range(0, 86400, 60):  # 1 day, 1-minute steps
     external.update(sim_time=t, dt=60)
-    print(f"Time {t/3600:.1f}h: Temp={atm.get_temperature():.2f}°C")
+    print(f"Time {t/3600:.1f}h: Temp={atm.get_temperature():.2f} C")
 ```
 
 ## Deterministic Simulation Notes

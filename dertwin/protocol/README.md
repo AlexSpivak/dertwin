@@ -22,6 +22,8 @@ The package abstracts low-level Modbus register handling while ensuring:
 - Proper scaling and type conversion (`uint16`, `int16`, `uint32`, `int32`)
 - Per-register endianness — big-endian (default, standard Modbus) or little-endian (Sungrow, Carlo Gavazzi)
 - Separation of **read (telemetry)** vs **write (command)** registers
+- Per-register function code routing (`FC02` discrete inputs vs `FC03/FC04` registers)
+- Full 16-bit Modbus address space — all four datastores (`di`, `co`, `ir`, `hr`) hold 65 536 addresses each, matching real Modicon device capability
 - Deterministic communication for simulation-time driven execution
 - Graceful shutdown handling for both transports
 
@@ -95,22 +97,6 @@ rtu = ModbusRTUSimulator(
 - `run_server()` – Start the async Modbus RTU serial server.
 - `shutdown()` – Stop the server and cancel background task.
 
-**Usage Example:**
-
-```python
-import asyncio
-from dertwin.protocol.modbus import ModbusRTUSimulator
-
-rtu = ModbusRTUSimulator(port="/dev/ttyUSB0", unit_id=1, baudrate=9600)
-
-async def run():
-    await rtu.run_server()
-    await asyncio.sleep(30)
-    await rtu.shutdown()
-
-asyncio.run(run())
-```
-
 **Testing without hardware:**
 
 For development and CI, use `socat` to create virtual serial port pairs:
@@ -179,15 +165,37 @@ from dertwin.protocol.modbus_helpers import (
 
 #### `write_telemetry_registers(context, unit_id, telemetry, register_map)`
 
-Writes device telemetry values into Modbus input registers (FC04). Only registers present in the `telemetry` dict are written — missing keys are skipped.
+Writes device telemetry into the Modbus datastore. Routes each register to the correct datastore by its function code:
+
+| Function code | Datastore | Used for |
+|---|---|---|
+| `FC02` | Discrete inputs | Single-bit boolean flags (fault, running, breaker closed) |
+| `FC03` | Holding registers | Read-back of writeable values (rare) |
+| `FC04` | Input registers | Multi-byte analog telemetry (default) |
+
+Only registers present in the `telemetry` dict are written — missing keys are skipped.
 
 #### `write_command_registers(context, unit_id, commands, register_map)`
 
-Writes command values into Modbus holding registers (FC03). Only registers present in the `commands` dict are written — unrelated registers are never overwritten with zero.
+Writes command values into Modbus holding registers (FC03/06/10 share datastore 3). Only registers explicitly present in `commands` are written — unrelated registers are never overwritten with zero.
 
 #### `collect_write_instructions(register_map, context, unit_id)`
 
 Reads all write-direction registers from the Modbus holding register store and returns a dict of `internal_name → decoded float`. Used by `DeviceController` on each step to detect command changes.
+
+---
+
+## Function Code Support
+
+| Function code | Direction | Datastore | Used in |
+|---|---|---|---|
+| `0x02` Read Discrete Inputs | Read | `di` (single bits) | CHP fault/warning/breaker flags |
+| `0x03` Read Holding Registers | Read | `hr` (16-bit words) | Command readback, occasional telemetry |
+| `0x04` Read Input Registers | Read | `ir` (16-bit words) | Default telemetry path |
+| `0x06` Write Single Register | Write | `hr` | Single-register commands (start/stop, mode) |
+| `0x10` Write Multiple Registers | Write | `hr` | Multi-register commands (32-bit setpoints) |
+
+Discrete inputs (`FC02`) write a single bit (0 or 1) per register address. Truthy values become `1`, falsy values become `0`. They are completely isolated from input registers and holding registers at the same address — writing a discrete input does not affect the corresponding holding or input register slot.
 
 ---
 
@@ -213,7 +221,20 @@ Real-world devices often deviate from standard big-endian Modbus byte order for 
 | `big` | `[high_word, low_word]` | Standard Modbus (default) |
 | `little` | `[low_word, high_word]` | Sungrow BESS, Carlo Gavazzi meters |
 
-The generic simulator register maps (`bess_modbus.yaml`, `energy_meter_modbus.yaml`, `pv_inverter_modbus.yaml`) use big-endian throughout. When integrating a real device that uses little-endian, create a device-specific register map and add `endian: little` only to the affected registers.
+The generic simulator register maps (`bess_modbus.yaml`, `energy_meter_modbus.yaml`, `pv_inverter_modbus.yaml`, `chp_modbus.yaml`) use big-endian throughout. When integrating a real device that uses little-endian, create a device-specific register map and add `endian: little` only to the affected registers.
+
+---
+
+## Address Space
+
+All four datastores (discrete inputs, coils, input registers, holding registers) cover the **full 16-bit Modbus address space** — addresses `0x0000` through `0xFFFF` (0–65535). This matches what real Modicon-convention devices expose:
+
+- `1xxxx` discrete inputs → datastore `di`
+- `0xxxx` coils → datastore `co`
+- `3xxxx` input registers → datastore `ir`
+- `4xxxx` holding registers → datastore `hr`
+
+Some devices (e.g. MWM TEM Evolution) place registers above address 30 000, which would not fit in a typical 10 000-address simulator block. DERTwin sizes all four blocks to the full address space so any real device's register map works without modification.
 
 ---
 
@@ -274,3 +295,4 @@ This guarantees deterministic behavior while providing a realistic protocol inte
 - Both TCP and RTU shutdown methods handle startup failures gracefully — a failed serial port bind will not crash `SiteController.stop()`.
 - `encode_value` and `decode_value` are pure functions with no side effects — safe to use in tests without a running server.
 - Fully async and compatible with `asyncio` event loops in real-time and headless modes.
+- Datastore sizing is ~2 MB per device (4 × 65 536 × 8 bytes). Negligible for typical scenarios but worth knowing if simulating many devices simultaneously.

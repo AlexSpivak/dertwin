@@ -8,6 +8,9 @@ from pymodbus.client import AsyncModbusTcpClient
 from dertwin.controllers.site_controller import SiteController
 from dertwin.core.registers import RegisterMap
 from dertwin.devices.bess.simulator import BESSSimulator
+from dertwin.devices.chp.controller import ACKNOWLEDGMENT_MAGIC
+from dertwin.devices.chp.engine import UnitState, StartupTimings
+from dertwin.devices.chp.simulator import CHPSimulator
 from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
 from dertwin.devices.external.grid_frequency import FrequencyEvent
 from dertwin.devices.external.grid_voltage import VoltageEvent
@@ -177,7 +180,7 @@ async def test_full_site_modbus_telemetry():
                 device_value = controller.device.get_telemetry().to_dict().get(r.name)
                 if device_value is None:
                     continue
-                expected_raw = int(device_value / r.scale)
+                expected_raw = round(device_value / r.scale)
                 assert raw == expected_raw
 
             client.close()
@@ -896,6 +899,814 @@ async def test_pv_remote_off_via_modbus():
             f"Expected zero output after remote off, "
             f"got {pv.get_telemetry().total_active_power:.3f} kW"
         )
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+# ==========================================================
+# CHP SITE CONTROLLER TESTS
+# ==========================================================
+
+def _make_chp_config(
+    base_port: int = 58000,
+    rated_kw: float = 4000.0,
+    **chp_overrides,
+) -> dict:
+    """Build a site config with a single CHP asset."""
+    project_root = Path(__file__).resolve().parent.parent.parent
+    chp_asset = {
+        "type": "chp",
+        "rated_kw": rated_kw,
+        "protocols": [{
+            "kind": "modbus_tcp",
+            "ip": "127.0.0.1",
+            "port": base_port,
+            "unit_id": 1,
+            "register_map": "chp_modbus.yaml",
+        }],
+        **chp_overrides,
+    }
+    return {
+        "site_name": "chp-test-site",
+        "step": 0.1,
+        "real_time": False,
+        "register_map_root": str(project_root / "configs/register_maps"),
+        "assets": [chp_asset],
+    }
+
+
+async def _step_chp_to_running(site, chp: CHPSimulator, max_steps: int = 10000):
+    """Drive the CHP through startup until it reaches RUNNING."""
+    for _ in range(max_steps):
+        await site.engine.step_once()
+        if chp.engine.state == UnitState.RUNNING:
+            return
+    raise AssertionError(f"CHP did not reach RUNNING, stuck in {chp.engine.state.name}")
+
+
+# ----------------------------------------------------------
+# Topology: CHP-only sites
+# ----------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_chp_only_site_starts_and_runs():
+    cfg = _make_chp_config(base_port=58010)
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(58010)
+        await run_steps(site, 10)
+        assert len(site.controllers) == 1
+        assert isinstance(site.controllers[0].device, CHPSimulator)
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_chp_custom_rated_kw_wired():
+    cfg = _make_chp_config(base_port=58020, rated_kw=2500.0)
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(58020)
+        chp: CHPSimulator = get_device(site, CHPSimulator)
+        assert chp.rated_kw == 2500.0
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_chp_custom_heat_ratio_wired():
+    cfg = _make_chp_config(base_port=58030, heat_to_power_ratio=1.3)
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(58030)
+        chp: CHPSimulator = get_device(site, CHPSimulator)
+        assert chp.chp.heat_to_power_ratio == 1.3
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+# ----------------------------------------------------------
+# E2E: Modbus command flow
+# ----------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_chp_start_command_via_modbus_triggers_startup():
+    """Writing start_stop=1 via Modbus should drive the state machine into STARTING."""
+    cfg = _make_chp_config(base_port=58040)
+    site = SiteController(cfg)
+    site.build()
+
+    # Override with fast startup timings so the test doesn't take minutes
+    chp: CHPSimulator = get_device(site, CHPSimulator)
+    chp.engine.timings = StartupTimings(
+        starting_to_warmup_s=1.0,
+        warmup_to_idle_s=2.0,
+        idle_to_sync_s=1.0,
+        sync_to_running_s=1.0,
+        stopping_to_ready_s=1.0,
+    )
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    reg_map = RegisterMap.from_yaml(project_root / "configs/register_maps/chp_modbus.yaml")
+    proto = site.protocols[0]
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(58040)
+
+        # Initial state should be READY
+        await run_steps(site, 5)
+        assert chp.engine.state == UnitState.READY
+
+        # Write start command directly into the protocol context
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"start_stop": 1},
+            register_map=reg_map,
+        )
+
+        # Step once for the command to be picked up
+        await run_steps(site, 2)
+        assert chp.engine.state == UnitState.STARTING
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_chp_full_startup_to_running():
+    """CHP should pass through all states and reach RUNNING via Modbus command."""
+    cfg = _make_chp_config(base_port=58050)
+    site = SiteController(cfg)
+    site.build()
+
+    chp: CHPSimulator = get_device(site, CHPSimulator)
+    chp.engine.timings = StartupTimings(
+        starting_to_warmup_s=1.0,
+        warmup_to_idle_s=2.0,
+        idle_to_sync_s=1.0,
+        sync_to_running_s=1.0,
+        stopping_to_ready_s=1.0,
+    )
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    reg_map = RegisterMap.from_yaml(project_root / "configs/register_maps/chp_modbus.yaml")
+    proto = site.protocols[0]
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(58050)
+        await run_steps(site, 5)
+
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"start_stop": 1},
+            register_map=reg_map,
+        )
+
+        await _step_chp_to_running(site, chp)
+        assert chp.is_running
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_chp_power_dispatch_via_modbus():
+    """After CHP reaches RUNNING, a power setpoint should dispatch power."""
+    cfg = _make_chp_config(
+        base_port=58060,
+        rated_kw=4000.0,
+        ramp_rate_percent_per_s=100.0,
+    )
+    site = SiteController(cfg)
+    site.build()
+
+    chp: CHPSimulator = get_device(site, CHPSimulator)
+    chp.engine.timings = StartupTimings(
+        starting_to_warmup_s=1.0,
+        warmup_to_idle_s=2.0,
+        idle_to_sync_s=1.0,
+        sync_to_running_s=1.0,
+        stopping_to_ready_s=1.0,
+    )
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    reg_map = RegisterMap.from_yaml(project_root / "configs/register_maps/chp_modbus.yaml")
+    proto = site.protocols[0]
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(58060)
+        await run_steps(site, 5)
+
+        # Start CHP
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"start_stop": 1},
+            register_map=reg_map,
+        )
+        await _step_chp_to_running(site, chp)
+
+        # Dispatch 50% (raw value 500 = 50.0% with scale 0.1)
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"power_setpoint_percent": 50.0},
+            register_map=reg_map,
+        )
+
+        # Let the dispatch ramp up
+        await run_steps(site, 100)
+
+        assert chp.actual_power_percent == pytest.approx(50.0, abs=2.0)
+        assert chp.electrical_power_kw == pytest.approx(2000.0, abs=50.0)
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_chp_fault_acknowledgment_via_modbus():
+    """Writing 0x10E1 to remote_acknowledgment must clear the fault state."""
+    cfg = _make_chp_config(base_port=58070)
+    site = SiteController(cfg)
+    site.build()
+
+    chp: CHPSimulator = get_device(site, CHPSimulator)
+    project_root = Path(__file__).resolve().parent.parent.parent
+    reg_map = RegisterMap.from_yaml(project_root / "configs/register_maps/chp_modbus.yaml")
+    proto = site.protocols[0]
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(58070)
+
+        # Trigger a fault
+        chp.fault_code = 1001
+        await run_steps(site, 5)
+        assert chp.engine.state == UnitState.FAULT
+
+        # Acknowledge via Modbus
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"remote_acknowledgment": ACKNOWLEDGMENT_MAGIC},
+            register_map=reg_map,
+        )
+        await run_steps(site, 5)
+
+        assert chp.engine.state == UnitState.READY
+        assert chp.fault_code == 0
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_chp_telemetry_visible_via_modbus():
+    """All key CHP telemetry registers must be readable via Modbus."""
+    cfg = _make_chp_config(base_port=58080, rated_kw=4000.0)
+    site = SiteController(cfg)
+    site.build()
+
+    chp: CHPSimulator = get_device(site, CHPSimulator)
+    chp.engine.timings = StartupTimings(
+        starting_to_warmup_s=1.0,
+        warmup_to_idle_s=2.0,
+        idle_to_sync_s=1.0,
+        sync_to_running_s=1.0,
+        stopping_to_ready_s=1.0,
+    )
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    reg_map = RegisterMap.from_yaml(project_root / "configs/register_maps/chp_modbus.yaml")
+    proto = site.protocols[0]
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(58080)
+        await run_steps(site, 5)
+
+        # Read unit_state register via the Modbus context
+        unit_state_reg = reg_map.get_by_name("unit_state")
+        raw = proto.context[1].getValues(4, unit_state_reg.address, unit_state_reg.count)
+        assert raw[0] == int(UnitState.READY)
+
+        # Drive to running and dispatch
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"start_stop": 1},
+            register_map=reg_map,
+        )
+        await _step_chp_to_running(site, chp)
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"power_setpoint_percent": 60.0},
+            register_map=reg_map,
+        )
+
+        # Use a higher ramp rate so the test doesn't need many steps
+        chp.chp.ramp_rate_percent_per_s = 100.0
+        await run_steps(site, 100)
+
+        # State register should now be RUNNING
+        raw = proto.context[1].getValues(4, unit_state_reg.address, unit_state_reg.count)
+        assert raw[0] == int(UnitState.RUNNING)
+
+        # Power register should reflect dispatch (~60%)
+        power_pct_reg = reg_map.get_by_name("actual_power_percent")
+        raw = proto.context[1].getValues(4, power_pct_reg.address, power_pct_reg.count)
+        register_pct = raw[0] * power_pct_reg.scale
+        assert register_pct == pytest.approx(60.0, abs=2.0)
+
+        # Power in kW should be ~2400
+        power_kw_reg = reg_map.get_by_name("actual_power_kw")
+        raw = proto.context[1].getValues(4, power_kw_reg.address, power_kw_reg.count)
+        value = (raw[0] << 16) + raw[1]
+        if power_kw_reg.type == "int32" and value > 0x7FFFFFFF:
+            value -= 1 << 32
+        register_kw = value * power_kw_reg.scale
+        assert register_kw == pytest.approx(2400.0, abs=50.0)
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_chp_discrete_inputs_visible_via_modbus():
+    """Discrete input (FC02) flags must be readable from the discrete-input datastore."""
+    cfg = _make_chp_config(base_port=58090)
+    site = SiteController(cfg)
+    site.build()
+
+    chp: CHPSimulator = get_device(site, CHPSimulator)
+    chp.engine.timings = StartupTimings(
+        starting_to_warmup_s=1.0,
+        warmup_to_idle_s=2.0,
+        idle_to_sync_s=1.0,
+        sync_to_running_s=1.0,
+        stopping_to_ready_s=1.0,
+    )
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    reg_map = RegisterMap.from_yaml(project_root / "configs/register_maps/chp_modbus.yaml")
+    proto = site.protocols[0]
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(58090)
+        await run_steps(site, 5)
+
+        # When READY, engine_running should be 0 in the discrete input datastore
+        engine_running_reg = reg_map.get_by_name("engine_running")
+        assert engine_running_reg.func == 0x02
+        raw = proto.context[1].getValues(2, engine_running_reg.address, 1)
+        assert raw[0] == 0
+
+        # Start the engine
+        write_command_registers(
+            context=proto.context,
+            unit_id=proto.unit_id,
+            commands={"start_stop": 1},
+            register_map=reg_map,
+        )
+        await _step_chp_to_running(site, chp)
+
+        # Now engine_running should be 1
+        raw = proto.context[1].getValues(2, engine_running_reg.address, 1)
+        assert raw[0] == 1
+
+        # circuit_breaker_closed should also be 1 when running
+        breaker_reg = reg_map.get_by_name("circuit_breaker_closed")
+        raw = proto.context[1].getValues(2, breaker_reg.address, 1)
+        assert raw[0] == 1
+
+        # collective_fault should be 0
+        fault_reg = reg_map.get_by_name("collective_fault")
+        raw = proto.context[1].getValues(2, fault_reg.address, 1)
+        assert raw[0] == 0
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+# ----------------------------------------------------------
+# Multi-device site with CHP
+# ----------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_chp_in_full_site_with_bess_pv_meter():
+    """CHP should coexist with BESS, PV, and energy meter in a single site."""
+    project_root = Path(__file__).resolve().parent.parent.parent
+    cfg = {
+        "site_name": "multi-asset-chp",
+        "step": 0.1,
+        "real_time": False,
+        "register_map_root": str(project_root / "configs/register_maps"),
+        "assets": [
+            {
+                "type": "bess",
+                "protocols": [{
+                    "kind": "modbus_tcp", "ip": "127.0.0.1", "port": 58100,
+                    "unit_id": 1, "register_map": "bess_modbus.yaml",
+                }],
+            },
+            {
+                "type": "inverter",
+                "protocols": [{
+                    "kind": "modbus_tcp", "ip": "127.0.0.1", "port": 58101,
+                    "unit_id": 1, "register_map": "pv_inverter_modbus.yaml",
+                }],
+            },
+            {
+                "type": "chp",
+                "rated_kw": 4000.0,
+                "protocols": [{
+                    "kind": "modbus_tcp", "ip": "127.0.0.1", "port": 58102,
+                    "unit_id": 1, "register_map": "chp_modbus.yaml",
+                }],
+            },
+            {
+                "type": "energy_meter",
+                "protocols": [{
+                    "kind": "modbus_tcp", "ip": "127.0.0.1", "port": 58103,
+                    "unit_id": 1, "register_map": "energy_meter_modbus.yaml",
+                }],
+            },
+        ],
+    }
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(58100)
+        await wait_ready(58101)
+        await wait_ready(58102)
+        await wait_ready(58103)
+        await run_steps(site, 10)
+
+        types = {c.device.__class__ for c in site.controllers}
+        assert BESSSimulator in types
+        assert PVSimulator in types
+        assert CHPSimulator in types
+        assert EnergyMeterSimulator in types
+        assert len(site.controllers) == 4
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+# ==========================================================
+# ASSET-DEVICE-PROTOCOL PAIRING TESTS
+#
+# Verify that each device writes telemetry to the correct
+# Modbus port regardless of asset ordering in the config.
+# Regression test for the zip misalignment bug where
+# energy meters in the middle of the config caused
+# PV telemetry to appear on the EM port and vice versa.
+# ==========================================================
+
+
+@pytest.mark.asyncio
+async def test_device_protocol_pairing_meter_in_middle():
+    """
+    With config order [BESS, EM, PV], each device must write
+    to its own port — not get swapped by the two-pass creation.
+    """
+    cfg = make_config(
+        [
+            {"type": "bess"},
+            {"type": "energy_meter"},
+            {"type": "inverter", "rated_kw": 10.0},
+        ],
+        base_port=57200,
+    )
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+
+    try:
+        await wait_ready(57200)  # BESS
+        await wait_ready(57201)  # EM
+        await wait_ready(57202)  # PV
+
+        # Give PV some irradiance so it produces power
+        pv: PVSimulator = get_device(site, PVSimulator)
+        pv.set_irradiance(1000.0)
+        await run_steps(site, 100)
+
+        # Verify each controller has the correct device type
+        assert isinstance(site.controllers[0].device, BESSSimulator), (
+            f"Port 57200 should be BESS, got {type(site.controllers[0].device).__name__}"
+        )
+        assert isinstance(site.controllers[1].device, EnergyMeterSimulator), (
+            f"Port 57201 should be EM, got {type(site.controllers[1].device).__name__}"
+        )
+        assert isinstance(site.controllers[2].device, PVSimulator), (
+            f"Port 57202 should be PV, got {type(site.controllers[2].device).__name__}"
+        )
+
+        # Read PV port (57202) — should have PV register layout
+        # PV total_active_power is at address 35 (uint32, scale 0.1)
+        pv_client = AsyncModbusTcpClient("127.0.0.1", port=57202)
+        await pv_client.connect()
+        resp = await pv_client.read_input_registers(address=35, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        pv_power = raw * 0.1  # scale from register map
+        # PV should be producing (rated 10 kW, clipped)
+        assert pv_power > 0.0, f"PV port should show power > 0, got {pv_power}"
+        assert pv_power <= 10000.0, f"PV power should be <= rated 10 kW (10000 W), got {pv_power}"
+        pv_client.close()
+
+        # Read EM port (57201) — should have EM register layout
+        # EM total_active_power is at address 40 (int32, scale 0.0001)
+        em_client = AsyncModbusTcpClient("127.0.0.1", port=57201)
+        await em_client.connect()
+        resp = await em_client.read_input_registers(address=40, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        if raw & 0x80000000:
+            raw -= 1 << 32
+        em_power = raw * 0.0001  # scale from register map
+        # EM grid power = base_load(5 kW) - PV — should be negative (export)
+        assert em_power < 0.0, (
+            f"EM port should show negative power (export) with PV producing, got {em_power}"
+        )
+        em_client.close()
+
+        # Read BESS port (57200) — SOC register at address 32002
+        bess_client = AsyncModbusTcpClient("127.0.0.1", port=57200)
+        await bess_client.connect()
+        resp = await bess_client.read_input_registers(address=32002, count=1)
+        assert not resp.isError()
+        soc = resp.registers[0] * 0.1
+        assert 0.0 <= soc <= 100.0, f"BESS SOC should be 0-100%, got {soc}"
+        bess_client.close()
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_device_protocol_pairing_meter_first():
+    """
+    With config order [EM, BESS, PV], pairing must still be correct.
+    """
+    cfg = make_config(
+        [
+            {"type": "energy_meter"},
+            {"type": "bess"},
+            {"type": "inverter", "rated_kw": 10.0},
+        ],
+        base_port=57210,
+    )
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+
+    try:
+        await wait_ready(57210)  # EM
+        await wait_ready(57211)  # BESS
+        await wait_ready(57212)  # PV
+
+        pv: PVSimulator = get_device(site, PVSimulator)
+        pv.set_irradiance(1000.0)
+        await run_steps(site, 100)
+
+        # Verify controller-device types match config order
+        assert isinstance(site.controllers[0].device, EnergyMeterSimulator), (
+            f"Port 57210 should be EM, got {type(site.controllers[0].device).__name__}"
+        )
+        assert isinstance(site.controllers[1].device, BESSSimulator), (
+            f"Port 57211 should be BESS, got {type(site.controllers[1].device).__name__}"
+        )
+        assert isinstance(site.controllers[2].device, PVSimulator), (
+            f"Port 57212 should be PV, got {type(site.controllers[2].device).__name__}"
+        )
+
+        # Read EM port (57210) — EM total_active_power at address 40
+        em_client = AsyncModbusTcpClient("127.0.0.1", port=57210)
+        await em_client.connect()
+        resp = await em_client.read_input_registers(address=40, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        if raw & 0x80000000:
+            raw -= 1 << 32
+        em_power = raw * 0.0001
+        assert em_power < 0.0, (
+            f"EM port should show export with PV producing, got {em_power}"
+        )
+        em_client.close()
+
+        # Read PV port (57212) — PV total_active_power at address 35
+        pv_client = AsyncModbusTcpClient("127.0.0.1", port=57212)
+        await pv_client.connect()
+        resp = await pv_client.read_input_registers(address=35, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        pv_power = raw * 0.1
+        assert pv_power > 0.0, f"PV port should show power > 0, got {pv_power}"
+        assert pv_power <= 10000.0, f"PV power should be <= 10 kW, got {pv_power}"
+        pv_client.close()
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_device_protocol_pairing_meter_last():
+    """
+    With config order [BESS, PV, EM] — the 'natural' order that
+    happened to work before the fix. Verify it still works.
+    """
+    cfg = make_config(
+        [
+            {"type": "bess"},
+            {"type": "inverter", "rated_kw": 10.0},
+            {"type": "energy_meter"},
+        ],
+        base_port=57220,
+    )
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+
+    try:
+        await wait_ready(57220)  # BESS
+        await wait_ready(57221)  # PV
+        await wait_ready(57222)  # EM
+
+        pv: PVSimulator = get_device(site, PVSimulator)
+        pv.set_irradiance(1000.0)
+        await run_steps(site, 100)
+
+        assert isinstance(site.controllers[0].device, BESSSimulator)
+        assert isinstance(site.controllers[1].device, PVSimulator)
+        assert isinstance(site.controllers[2].device, EnergyMeterSimulator)
+
+        # PV port (57221) — address 35
+        pv_client = AsyncModbusTcpClient("127.0.0.1", port=57221)
+        await pv_client.connect()
+        resp = await pv_client.read_input_registers(address=35, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        pv_power = raw * 0.1
+        assert pv_power > 0.0
+        assert pv_power <= 10000.0
+        pv_client.close()
+
+        # EM port (57222) — address 40
+        em_client = AsyncModbusTcpClient("127.0.0.1", port=57222)
+        await em_client.connect()
+        resp = await em_client.read_input_registers(address=40, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        if raw & 0x80000000:
+            raw -= 1 << 32
+        em_power = raw * 0.0001
+        assert em_power < 0.0
+        em_client.close()
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_device_protocol_pairing_multiple_meters():
+    """
+    Two meters interleaved with other assets must each get
+    their own protocol and write correct telemetry.
+    """
+    cfg = make_config(
+        [
+            {"type": "energy_meter"},
+            {"type": "bess"},
+            {"type": "energy_meter"},
+            {"type": "inverter"},
+        ],
+        base_port=57230,
+    )
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+
+    try:
+        await wait_ready(57230)
+        await wait_ready(57231)
+        await wait_ready(57232)
+        await wait_ready(57233)
+
+        await run_steps(site, 50)
+
+        # 4 controllers total
+        assert len(site.controllers) == 4
+
+        # Verify types match config order
+        assert isinstance(site.controllers[0].device, EnergyMeterSimulator)
+        assert isinstance(site.controllers[1].device, BESSSimulator)
+        assert isinstance(site.controllers[2].device, EnergyMeterSimulator)
+        assert isinstance(site.controllers[3].device, PVSimulator)
+
+        # Both EM ports should return valid frequency at address 51
+        for port in [57230, 57232]:
+            client = AsyncModbusTcpClient("127.0.0.1", port=port)
+            await client.connect()
+            resp = await client.read_input_registers(address=51, count=1)
+            assert not resp.isError()
+            freq = resp.registers[0] * 0.1
+            assert 49.0 <= freq <= 51.0, f"EM on port {port}: frequency={freq}"
+            client.close()
+
+        # BESS port should return valid SOC at address 32002
+        bess_client = AsyncModbusTcpClient("127.0.0.1", port=57231)
+        await bess_client.connect()
+        resp = await bess_client.read_input_registers(address=32002, count=1)
+        assert not resp.isError()
+        soc = resp.registers[0] * 0.1
+        assert 0.0 <= soc <= 100.0
+        bess_client.close()
 
     finally:
         await site.stop()

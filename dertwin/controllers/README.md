@@ -27,7 +27,7 @@ Manages a single simulated device, applying commands and pushing telemetry to pr
 
 - Collect commands from all attached protocols
 - Apply commands to device
-- Write telemetry to all protocols
+- Write telemetry to all protocols (routes by register function code: FC02 → discrete inputs, FC04 → input registers)
 - Step the device simulation forward
 
 ### Constructor
@@ -49,7 +49,7 @@ DeviceController(
 2. Initialize device on first step using `init_applied_commands`
 3. Apply commands if changed since last step
 4. Step device simulation (`update(dt)`)
-5. Retrieve telemetry (`get_telemetry()`) and write back to protocols
+5. Retrieve telemetry (`get_telemetry()`) and write back to protocols — discrete inputs go to datastore 2, analog telemetry goes to datastore 4
 
 ### Example Usage
 
@@ -104,7 +104,7 @@ High-level site runtime orchestrator. Manages:
 - Simulation engine
 - Devices and their controllers
 - Protocol servers (TCP and RTU)
-- External models (ambient temperature, irradiance, grid voltage/frequency)
+- External models (ambient temperature, irradiance, grid voltage/frequency, site power flow)
 
 ### Responsibilities
 - Build full site from configuration
@@ -123,9 +123,9 @@ SiteController(config: Dict)
 
 `build()`
 - Instantiates devices based on `config["assets"]`
-- Creates energy meters
+- Creates energy meters last so they can observe all generators
 - Builds device controllers and attaches protocols via `_create_protocol()`
-- Constructs external models
+- Constructs external models — including the `SitePowerModel`, which now aggregates load, PV, BESS, and CHP generation
 - Initializes simulation engine
 
 `start()`
@@ -148,6 +148,19 @@ SiteController(config: Dict)
 | `modbus_rtu` | `ModbusRTUSimulator` | `port` (serial path), `unit_id`, `baudrate`, `parity`, `stopbits`, `bytesize`, `timeout` |
 
 Unknown `kind` values raise `ValueError`.
+
+### Device Creation
+
+`_create_device(asset_cfg)` routes asset config to the correct simulator class:
+
+| `type` | Class | Key Parameters |
+|---|---|---|
+| `bess` | `BESSSimulator` | `capacity_kwh`, `initial_soc`, `max_charge_kw`, `max_discharge_kw`, `ramp_rate_kw_per_s` |
+| `inverter` | `PVSimulator` | `rated_kw`, `module_efficiency`, `area_m2` |
+| `chp` | `CHPSimulator` | `rated_kw`, `heat_to_power_ratio`, `min_load_percent`, `max_load_percent` |
+| `energy_meter` | `EnergyMeterSimulator` | (no parameters — observes external models) |
+
+Unknown or unsupported asset types raise `ValueError`.
 
 ### Example Usage
 
@@ -182,6 +195,34 @@ await site.stop()
 }
 ```
 
+**Full-stack site with CHP:**
+```json
+{
+  "assets": [
+    {
+      "type": "bess",
+      "capacity_kwh": 100.0,
+      "protocols": [{ "kind": "modbus_tcp", "ip": "0.0.0.0", "port": 55001, "unit_id": 1, "register_map": "bess_modbus.yaml" }]
+    },
+    {
+      "type": "inverter",
+      "rated_kw": 30.0,
+      "protocols": [{ "kind": "modbus_tcp", "ip": "0.0.0.0", "port": 55002, "unit_id": 1, "register_map": "pv_inverter_modbus.yaml" }]
+    },
+    {
+      "type": "chp",
+      "rated_kw": 4000.0,
+      "heat_to_power_ratio": 1.0,
+      "protocols": [{ "kind": "modbus_tcp", "ip": "0.0.0.0", "port": 55003, "unit_id": 1, "register_map": "chp_modbus.yaml" }]
+    },
+    {
+      "type": "energy_meter",
+      "protocols": [{ "kind": "modbus_tcp", "ip": "0.0.0.0", "port": 55004, "unit_id": 1, "register_map": "energy_meter_modbus.yaml" }]
+    }
+  ]
+}
+```
+
 **Dual-protocol device config (TCP + RTU on one asset):**
 ```json
 {
@@ -192,13 +233,6 @@ await site.stop()
   ]
 }
 ```
-
-### Device Creation
-- BESS → `BESSSimulator`
-- PV → `PVSimulator`
-- Energy Meter → `EnergyMeterSimulator`
-
-Unknown or unsupported asset types raise `ValueError`.
 
 ---
 
@@ -215,6 +249,8 @@ Execution order per tick:
 external_models.update() → DeviceController.step() → clock.tick()
 ```
 Telemetry flows from devices → controllers → protocols (TCP, RTU, or both).
+
+`SitePowerModel` aggregates load, PV, BESS, and CHP generation into a single grid power balance. The energy meter observes this balance — it does not need to know which device types contributed to it.
 
 ---
 

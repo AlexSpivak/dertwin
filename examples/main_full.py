@@ -2,7 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from full.ems import BESSUnit, FullSiteEMS
+from full.ems import BESSUnit, CHPUnit, FullSiteEMS
 from protocol.modbus_client import SimpleModbusClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +30,7 @@ async def main():
         return str((REPO_ROOT / rel_path).resolve())
 
     bess_units = []
+    chp_units = []
     meter_client = None
     pv_client = None
 
@@ -52,6 +53,16 @@ async def main():
             )
             bess_units.append(unit)
 
+        elif kind == "chp":
+            name = asset.get("name", f"CHP-{len(chp_units) + 1}")
+            unit = CHPUnit(
+                client=client,
+                name=name,
+                rated_kw=asset.get("rated_kw", 4000.0),
+                dispatch_setpoint_percent=asset.get("dispatch_setpoint_percent", 60.0),
+            )
+            chp_units.append(unit)
+
         elif kind == "energy_meter":
             meter_client = client
 
@@ -59,17 +70,18 @@ async def main():
             pv_client = client
 
     if not bess_units:
-        print("[EMS] No BESS units found in config — aborting")
+        print("[EMS] No BESS units found in config -- aborting")
         return
     if not meter_client:
-        print("[EMS] No energy meter found in config — aborting")
+        print("[EMS] No energy meter found in config -- aborting")
         return
     if not pv_client:
-        print("[EMS] No PV inverter found in config — aborting")
+        print("[EMS] No PV inverter found in config -- aborting")
         return
 
     ems = FullSiteEMS(
         bess_units=bess_units,
+        chp_units=chp_units,
         meter_client=meter_client,
         pv_client=pv_client,
         poll_interval=poll_interval,

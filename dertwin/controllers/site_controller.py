@@ -9,6 +9,7 @@ from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap
 
 from dertwin.devices.bess.simulator import BESSSimulator
+from dertwin.devices.chp.simulator import CHPSimulator
 from dertwin.devices.pv.simulator import PVSimulator
 from dertwin.devices.energy_meter.simulator import EnergyMeterSimulator
 
@@ -51,7 +52,6 @@ class SiteController:
     def build(self) -> None:
         logger.info("Building site: %s", self.config.get("site_name", "unnamed"))
 
-
         if self.config.get("external_models"):
             self.external_models = ExternalModels.from_config(self.config.get("external_models"))
         else:
@@ -60,31 +60,40 @@ class SiteController:
         devices_by_type: Dict[str, List] = {}
         devices: List = []
 
-        # Create devices
-        for asset in [a for a in self.config["assets"] if a["type"] != "energy_meter"]:
+        # Pre-allocate slots to preserve config order across two-pass creation.
+        # Energy meters must be created after the power model is built, but
+        # controllers/protocols must follow the original config ordering so
+        # each device binds to the correct Modbus port.
+        asset_device_pairs: List[Optional[tuple]] = [None] * len(self.config["assets"])
+
+        # First pass: create non-meter devices
+        for i, asset in enumerate(self.config["assets"]):
+            if asset["type"] == "energy_meter":
+                continue
             device = self._create_device(asset)
             devices.append(device)
             devices_by_type.setdefault(asset["type"], []).append(device)
+            asset_device_pairs[i] = (asset, device)
 
-        self.external_models.power_model = ExternalModels.build_power_model(devices_by_type, self.config.get("external_models"))
+        self.external_models.power_model = ExternalModels.build_power_model(
+            devices_by_type, self.config.get("external_models")
+        )
 
-
-        # ------------------------------------------------------
-        # Create Energy Meters
-        # ------------------------------------------------------
-
-        for _ in [a for a in self.config["assets"] if a["type"] == "energy_meter"]:
+        # Second pass: create energy meters (need power model)
+        for i, asset in enumerate(self.config["assets"]):
+            if asset["type"] != "energy_meter":
+                continue
             meter = EnergyMeterSimulator(
                 power_model=self.external_models.power_model,
                 grid_model=self.external_models.grid_frequency_model,
                 grid_voltage_model=self.external_models.grid_voltage_model,
             )
-
             devices.append(meter)
             devices_by_type.setdefault("energy_meter", []).append(meter)
+            asset_device_pairs[i] = (asset, meter)
 
-        # Create controllers + protocols
-        for asset, device in zip(self.config["assets"], devices):
+        # Create controllers + protocols in original config order
+        for asset, device in asset_device_pairs:
 
             for proto_cfg in asset.get("protocols", []):
 
@@ -217,6 +226,17 @@ class SiteController:
                 grid_voltage_model=self.external_models.grid_voltage_model,
                 grid_frequency_model=self.external_models.grid_frequency_model,
                 irradiance_model=self.external_models.irradiance_model,
+            )
+
+        if dtype == "chp":
+            return CHPSimulator(
+                rated_kw=asset_cfg.get("rated_kw", 4000.0),
+                heat_to_power_ratio=asset_cfg.get("heat_to_power_ratio", 1.0),
+                min_load_percent=asset_cfg.get("min_load_percent", 30.0),
+                max_load_percent=asset_cfg.get("max_load_percent", 110.0),
+                ambient_temp_model=self.external_models.ambient_temperature_model,
+                grid_voltage_model=self.external_models.grid_voltage_model,
+                grid_frequency_model=self.external_models.grid_frequency_model,
             )
 
         raise ValueError(f"Unknown or unsupported asset type: {dtype}")

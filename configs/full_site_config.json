@@ -1,5 +1,5 @@
 {
-  "site_name": "full-site-demo",
+  "site_name": "full-site-all-devices",
   "step": 0.1,
   "real_time": true,
   "start_time_h": 12.0,
@@ -7,7 +7,7 @@
 
   "external_models": {
     "power": {
-      "base_load_w": 15000.0
+      "base_load_w": 50000.0
     },
     "irradiance": {
       "peak": 1000.0,
@@ -85,13 +85,30 @@
       ]
     },
     {
+      "comment": "CHP — 4 MW gas engine, MWM-style state machine, 1.0 heat-to-power ratio",
+      "type": "chp",
+      "rated_kw": 4000.0,
+      "heat_to_power_ratio": 1.0,
+      "min_load_percent": 30.0,
+      "max_load_percent": 110.0,
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55004,
+          "unit_id": 1,
+          "register_map": "chp_modbus.yaml"
+        }
+      ]
+    },
+    {
       "comment": "Site energy meter — aggregates all power flows",
       "type": "energy_meter",
       "protocols": [
         {
           "kind": "modbus_tcp",
           "ip": "0.0.0.0",
-          "port": 55004,
+          "port": 55005,
           "unit_id": 1,
           "register_map": "energy_meter_modbus.yaml"
         }
