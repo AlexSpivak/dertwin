@@ -60,25 +60,27 @@ class SiteController:
         devices_by_type: Dict[str, List] = {}
         devices: List = []
 
-        # Track asset config ↔ device pairs to avoid zip misalignment
-        # when energy meters are not last in the config
-        asset_device_pairs: List[tuple] = []
+        # Pre-allocate slots to preserve config order across two-pass creation.
+        # Energy meters must be created after the power model is built, but
+        # controllers/protocols must follow the original config ordering so
+        # each device binds to the correct Modbus port.
+        asset_device_pairs: List[Optional[tuple]] = [None] * len(self.config["assets"])
 
         # First pass: create non-meter devices
-        for asset in self.config["assets"]:
+        for i, asset in enumerate(self.config["assets"]):
             if asset["type"] == "energy_meter":
                 continue
             device = self._create_device(asset)
             devices.append(device)
             devices_by_type.setdefault(asset["type"], []).append(device)
-            asset_device_pairs.append((asset, device))
+            asset_device_pairs[i] = (asset, device)
 
         self.external_models.power_model = ExternalModels.build_power_model(
             devices_by_type, self.config.get("external_models")
         )
 
         # Second pass: create energy meters (need power model)
-        for asset in self.config["assets"]:
+        for i, asset in enumerate(self.config["assets"]):
             if asset["type"] != "energy_meter":
                 continue
             meter = EnergyMeterSimulator(
@@ -88,9 +90,9 @@ class SiteController:
             )
             devices.append(meter)
             devices_by_type.setdefault("energy_meter", []).append(meter)
-            asset_device_pairs.append((asset, meter))
+            asset_device_pairs[i] = (asset, meter)
 
-        # Create controllers + protocols from correctly paired list
+        # Create controllers + protocols in original config order
         for asset, device in asset_device_pairs:
 
             for proto_cfg in asset.get("protocols", []):

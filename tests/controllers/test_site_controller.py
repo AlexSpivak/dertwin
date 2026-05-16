@@ -180,7 +180,7 @@ async def test_full_site_modbus_telemetry():
                 device_value = controller.device.get_telemetry().to_dict().get(r.name)
                 if device_value is None:
                     continue
-                expected_raw = int(device_value / r.scale)
+                expected_raw = round(device_value / r.scale)
                 assert raw == expected_raw
 
             client.close()
@@ -1413,6 +1413,300 @@ async def test_chp_in_full_site_with_bess_pv_meter():
         assert CHPSimulator in types
         assert EnergyMeterSimulator in types
         assert len(site.controllers) == 4
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+# ==========================================================
+# ASSET-DEVICE-PROTOCOL PAIRING TESTS
+#
+# Verify that each device writes telemetry to the correct
+# Modbus port regardless of asset ordering in the config.
+# Regression test for the zip misalignment bug where
+# energy meters in the middle of the config caused
+# PV telemetry to appear on the EM port and vice versa.
+# ==========================================================
+
+
+@pytest.mark.asyncio
+async def test_device_protocol_pairing_meter_in_middle():
+    """
+    With config order [BESS, EM, PV], each device must write
+    to its own port — not get swapped by the two-pass creation.
+    """
+    cfg = make_config(
+        [
+            {"type": "bess"},
+            {"type": "energy_meter"},
+            {"type": "inverter", "rated_kw": 10.0},
+        ],
+        base_port=57200,
+    )
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+
+    try:
+        await wait_ready(57200)  # BESS
+        await wait_ready(57201)  # EM
+        await wait_ready(57202)  # PV
+
+        # Give PV some irradiance so it produces power
+        pv: PVSimulator = get_device(site, PVSimulator)
+        pv.set_irradiance(1000.0)
+        await run_steps(site, 100)
+
+        # Verify each controller has the correct device type
+        assert isinstance(site.controllers[0].device, BESSSimulator), (
+            f"Port 57200 should be BESS, got {type(site.controllers[0].device).__name__}"
+        )
+        assert isinstance(site.controllers[1].device, EnergyMeterSimulator), (
+            f"Port 57201 should be EM, got {type(site.controllers[1].device).__name__}"
+        )
+        assert isinstance(site.controllers[2].device, PVSimulator), (
+            f"Port 57202 should be PV, got {type(site.controllers[2].device).__name__}"
+        )
+
+        # Read PV port (57202) — should have PV register layout
+        # PV total_active_power is at address 35 (uint32, scale 0.1)
+        pv_client = AsyncModbusTcpClient("127.0.0.1", port=57202)
+        await pv_client.connect()
+        resp = await pv_client.read_input_registers(address=35, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        pv_power = raw * 0.1  # scale from register map
+        # PV should be producing (rated 10 kW, clipped)
+        assert pv_power > 0.0, f"PV port should show power > 0, got {pv_power}"
+        assert pv_power <= 10000.0, f"PV power should be <= rated 10 kW (10000 W), got {pv_power}"
+        pv_client.close()
+
+        # Read EM port (57201) — should have EM register layout
+        # EM total_active_power is at address 40 (int32, scale 0.0001)
+        em_client = AsyncModbusTcpClient("127.0.0.1", port=57201)
+        await em_client.connect()
+        resp = await em_client.read_input_registers(address=40, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        if raw & 0x80000000:
+            raw -= 1 << 32
+        em_power = raw * 0.0001  # scale from register map
+        # EM grid power = base_load(5 kW) - PV — should be negative (export)
+        assert em_power < 0.0, (
+            f"EM port should show negative power (export) with PV producing, got {em_power}"
+        )
+        em_client.close()
+
+        # Read BESS port (57200) — SOC register at address 32002
+        bess_client = AsyncModbusTcpClient("127.0.0.1", port=57200)
+        await bess_client.connect()
+        resp = await bess_client.read_input_registers(address=32002, count=1)
+        assert not resp.isError()
+        soc = resp.registers[0] * 0.1
+        assert 0.0 <= soc <= 100.0, f"BESS SOC should be 0-100%, got {soc}"
+        bess_client.close()
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_device_protocol_pairing_meter_first():
+    """
+    With config order [EM, BESS, PV], pairing must still be correct.
+    """
+    cfg = make_config(
+        [
+            {"type": "energy_meter"},
+            {"type": "bess"},
+            {"type": "inverter", "rated_kw": 10.0},
+        ],
+        base_port=57210,
+    )
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+
+    try:
+        await wait_ready(57210)  # EM
+        await wait_ready(57211)  # BESS
+        await wait_ready(57212)  # PV
+
+        pv: PVSimulator = get_device(site, PVSimulator)
+        pv.set_irradiance(1000.0)
+        await run_steps(site, 100)
+
+        # Verify controller-device types match config order
+        assert isinstance(site.controllers[0].device, EnergyMeterSimulator), (
+            f"Port 57210 should be EM, got {type(site.controllers[0].device).__name__}"
+        )
+        assert isinstance(site.controllers[1].device, BESSSimulator), (
+            f"Port 57211 should be BESS, got {type(site.controllers[1].device).__name__}"
+        )
+        assert isinstance(site.controllers[2].device, PVSimulator), (
+            f"Port 57212 should be PV, got {type(site.controllers[2].device).__name__}"
+        )
+
+        # Read EM port (57210) — EM total_active_power at address 40
+        em_client = AsyncModbusTcpClient("127.0.0.1", port=57210)
+        await em_client.connect()
+        resp = await em_client.read_input_registers(address=40, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        if raw & 0x80000000:
+            raw -= 1 << 32
+        em_power = raw * 0.0001
+        assert em_power < 0.0, (
+            f"EM port should show export with PV producing, got {em_power}"
+        )
+        em_client.close()
+
+        # Read PV port (57212) — PV total_active_power at address 35
+        pv_client = AsyncModbusTcpClient("127.0.0.1", port=57212)
+        await pv_client.connect()
+        resp = await pv_client.read_input_registers(address=35, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        pv_power = raw * 0.1
+        assert pv_power > 0.0, f"PV port should show power > 0, got {pv_power}"
+        assert pv_power <= 10000.0, f"PV power should be <= 10 kW, got {pv_power}"
+        pv_client.close()
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_device_protocol_pairing_meter_last():
+    """
+    With config order [BESS, PV, EM] — the 'natural' order that
+    happened to work before the fix. Verify it still works.
+    """
+    cfg = make_config(
+        [
+            {"type": "bess"},
+            {"type": "inverter", "rated_kw": 10.0},
+            {"type": "energy_meter"},
+        ],
+        base_port=57220,
+    )
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+
+    try:
+        await wait_ready(57220)  # BESS
+        await wait_ready(57221)  # PV
+        await wait_ready(57222)  # EM
+
+        pv: PVSimulator = get_device(site, PVSimulator)
+        pv.set_irradiance(1000.0)
+        await run_steps(site, 100)
+
+        assert isinstance(site.controllers[0].device, BESSSimulator)
+        assert isinstance(site.controllers[1].device, PVSimulator)
+        assert isinstance(site.controllers[2].device, EnergyMeterSimulator)
+
+        # PV port (57221) — address 35
+        pv_client = AsyncModbusTcpClient("127.0.0.1", port=57221)
+        await pv_client.connect()
+        resp = await pv_client.read_input_registers(address=35, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        pv_power = raw * 0.1
+        assert pv_power > 0.0
+        assert pv_power <= 10000.0
+        pv_client.close()
+
+        # EM port (57222) — address 40
+        em_client = AsyncModbusTcpClient("127.0.0.1", port=57222)
+        await em_client.connect()
+        resp = await em_client.read_input_registers(address=40, count=2)
+        assert not resp.isError()
+        raw = (resp.registers[0] << 16) | resp.registers[1]
+        if raw & 0x80000000:
+            raw -= 1 << 32
+        em_power = raw * 0.0001
+        assert em_power < 0.0
+        em_client.close()
+
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_device_protocol_pairing_multiple_meters():
+    """
+    Two meters interleaved with other assets must each get
+    their own protocol and write correct telemetry.
+    """
+    cfg = make_config(
+        [
+            {"type": "energy_meter"},
+            {"type": "bess"},
+            {"type": "energy_meter"},
+            {"type": "inverter"},
+        ],
+        base_port=57230,
+    )
+    site = SiteController(cfg)
+    site.build()
+    task = asyncio.create_task(site.start())
+
+    try:
+        await wait_ready(57230)
+        await wait_ready(57231)
+        await wait_ready(57232)
+        await wait_ready(57233)
+
+        await run_steps(site, 50)
+
+        # 4 controllers total
+        assert len(site.controllers) == 4
+
+        # Verify types match config order
+        assert isinstance(site.controllers[0].device, EnergyMeterSimulator)
+        assert isinstance(site.controllers[1].device, BESSSimulator)
+        assert isinstance(site.controllers[2].device, EnergyMeterSimulator)
+        assert isinstance(site.controllers[3].device, PVSimulator)
+
+        # Both EM ports should return valid frequency at address 51
+        for port in [57230, 57232]:
+            client = AsyncModbusTcpClient("127.0.0.1", port=port)
+            await client.connect()
+            resp = await client.read_input_registers(address=51, count=1)
+            assert not resp.isError()
+            freq = resp.registers[0] * 0.1
+            assert 49.0 <= freq <= 51.0, f"EM on port {port}: frequency={freq}"
+            client.close()
+
+        # BESS port should return valid SOC at address 32002
+        bess_client = AsyncModbusTcpClient("127.0.0.1", port=57231)
+        await bess_client.connect()
+        resp = await bess_client.read_input_registers(address=32002, count=1)
+        assert not resp.isError()
+        soc = resp.registers[0] * 0.1
+        assert 0.0 <= soc <= 100.0
+        bess_client.close()
 
     finally:
         await site.stop()
