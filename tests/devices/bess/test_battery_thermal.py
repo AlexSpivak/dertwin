@@ -14,7 +14,13 @@ def test_temperature_increases_under_load():
         5) Thermal capacity scaling
     """
 
-    battery = BatteryModel(100, initial_soc=50)
+    battery = BatteryModel(
+              100,
+              initial_soc=50,
+              internal_resistance=0.05,
+              thermal_capacity_j_per_k=5000.0,
+              thermal_conductance_w_per_k=0.5,
+          )
 
     battery.temperature_c = 30.0
     initial_temp = 30.0
@@ -80,7 +86,13 @@ def test_temperature_cools_intermediate():
     since power = 0 → no Joule heating.
     """
 
-    battery = BatteryModel(100, initial_soc=50)
+    battery = BatteryModel(
+              100,
+              initial_soc=50,
+              internal_resistance=0.05,
+              thermal_capacity_j_per_k=5000.0,
+              thermal_conductance_w_per_k=0.5,
+          )
 
     battery.temperature_c = 60.0
     initial_temp = 60.0

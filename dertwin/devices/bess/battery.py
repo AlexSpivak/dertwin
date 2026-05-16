@@ -33,16 +33,27 @@ class BatteryModel:
     Does NOT enforce inverter ramp limits (handled by inverter model).
     """
 
+    # Auto-scaling reference: thermal mass and cooling scale linearly with
+    # capacity_kwh against a 100 kWh "1×" battery; internal resistance scales
+    # inversely (bigger packs have more parallel strings → lower pack-level R).
+    # Calibrated so steady-state ΔT at 1C is ~0.5 K regardless of pack size.
+    _AUTO_SCALE_REF_KWH = 100.0
+    _AUTO_SCALE_R_OHM = 0.005
+    _AUTO_SCALE_C_TH_J_PER_K = 500_000.0
+    _AUTO_SCALE_G_TH_W_PER_K = 200.0
+
     def __init__(
         self,
         capacity_kwh: float,
         initial_soc: float = 50.0,
         round_trip_eff: float = 0.92,
-        internal_resistance: float = 0.05,
+        internal_resistance: float | None = None,
         ambient_temp_c: float = 20.0,
         limits: BatteryLimits | None = None,
         max_charge_kw: float | None = None,
         max_discharge_kw: float | None = None,
+        thermal_capacity_j_per_k: float | None = None,
+        thermal_conductance_w_per_k: float | None = None,
     ):
         self.capacity_kwh = capacity_kwh
         self.energy_kwh = capacity_kwh * initial_soc / 100.0
@@ -52,8 +63,16 @@ class BatteryModel:
         self.charge_eff = math.sqrt(round_trip_eff)
         self.discharge_eff = math.sqrt(round_trip_eff)
 
+        # Auto-scale electrical + thermal parameters with pack size when not
+        # explicitly provided.
+        scale = capacity_kwh / self._AUTO_SCALE_REF_KWH if capacity_kwh > 0 else 1.0
+
         # Electrical
-        self.internal_resistance = internal_resistance
+        self.internal_resistance = (
+            internal_resistance
+            if internal_resistance is not None
+            else self._AUTO_SCALE_R_OHM / scale
+        )
 
         # Capability limits (absolute)
         self.max_charge_kw = max_charge_kw if max_charge_kw is not None else capacity_kwh
@@ -62,8 +81,16 @@ class BatteryModel:
         # Thermal
         self.ambient_temp_c = ambient_temp_c
         self.temperature_c = ambient_temp_c
-        self.thermal_capacity_j_per_k = 5000.0
-        self.thermal_conductance_w_per_k = 0.5
+        self.thermal_capacity_j_per_k = (
+            thermal_capacity_j_per_k
+            if thermal_capacity_j_per_k is not None
+            else self._AUTO_SCALE_C_TH_J_PER_K * scale
+        )
+        self.thermal_conductance_w_per_k = (
+            thermal_conductance_w_per_k
+            if thermal_conductance_w_per_k is not None
+            else self._AUTO_SCALE_G_TH_W_PER_K * scale
+        )
 
         # Lifetime tracking
         self.charge_energy_total_kwh = 0.0
