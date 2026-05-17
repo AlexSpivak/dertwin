@@ -1,7 +1,7 @@
 from typing import Dict, Optional
 
 from dertwin.core.device import SimulatedDevice
-from dertwin.devices.bess.battery import BatteryModel
+from dertwin.devices.bess.battery import BatteryModel, BatteryLimits
 from dertwin.devices.bess.inverter import InverterModel
 from dertwin.devices.bess.bess import BESSModel
 from dertwin.devices.bess.controller import BESSController
@@ -27,6 +27,11 @@ class BESSSimulator(SimulatedDevice):
             max_discharge_kw: float = 20.0,
             ramp_rate_kw_per_s: float = 100.0,
             ambient_temp_c: float = 20.0,
+            round_trip_eff: float = 0.92,
+            internal_resistance: Optional[float] = None,
+            thermal_capacity_j_per_k: Optional[float] = None,
+            thermal_conductance_w_per_k: Optional[float] = None,
+            limits: Optional[BatteryLimits] = None,
             ambient_temp_model: Optional[AmbientTemperatureModel] = None,
             grid_frequency_model: Optional[GridFrequencyModel] = None,
             grid_voltage_model: Optional[GridVoltageModel] = None,
@@ -39,6 +44,11 @@ class BESSSimulator(SimulatedDevice):
             max_charge_kw=max_charge_kw,
             max_discharge_kw=max_discharge_kw,
             ambient_temp_c=ambient_temp_c,
+            round_trip_eff=round_trip_eff,
+            internal_resistance=internal_resistance,
+            thermal_capacity_j_per_k=thermal_capacity_j_per_k,
+            thermal_conductance_w_per_k=thermal_conductance_w_per_k,
+            limits=limits,
         )
 
         self.inverter = InverterModel(

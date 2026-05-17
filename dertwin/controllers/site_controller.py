@@ -7,6 +7,7 @@ from dertwin.core.clock import SimulationClock
 from dertwin.core.engine import SimulationEngine
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap
+from dertwin.devices.bess.battery import BatteryLimits
 
 from dertwin.devices.bess.simulator import BESSSimulator
 from dertwin.devices.chp.simulator import CHPSimulator
@@ -205,13 +206,30 @@ class SiteController:
     def _create_device(self, asset_cfg: Dict):
         dtype = asset_cfg["type"]
 
+        # In site_controller.py, replace the `if dtype == "bess":` block
+        # inside `_create_device` with this:
+
         if dtype == "bess":
+            soc_limits_cfg = asset_cfg.get("soc_limits") or {}
+            limits = BatteryLimits(
+                soc_lower_limit_1=soc_limits_cfg.get("lower_1", 25.0),
+                soc_lower_limit_2=soc_limits_cfg.get("lower_2", 20.0),
+                soc_upper_limit_1=soc_limits_cfg.get("upper_1", 85.0),
+                soc_upper_limit_2=soc_limits_cfg.get("upper_2", 90.0),
+            )
+
             return BESSSimulator(
                 capacity_kwh=asset_cfg.get("capacity_kwh", 100.0),
                 initial_soc=asset_cfg.get("initial_soc", 50.0),
                 max_charge_kw=asset_cfg.get("max_charge_kw", 20.0),
                 max_discharge_kw=asset_cfg.get("max_discharge_kw", 20.0),
                 ramp_rate_kw_per_s=asset_cfg.get("ramp_rate_kw_per_s", 100.0),
+                ambient_temp_c=asset_cfg.get("ambient_temp_c", 20.0),
+                round_trip_eff=asset_cfg.get("round_trip_eff", 0.92),
+                internal_resistance=asset_cfg.get("internal_resistance"),
+                thermal_capacity_j_per_k=asset_cfg.get("thermal_capacity_j_per_k"),
+                thermal_conductance_w_per_k=asset_cfg.get("thermal_conductance_w_per_k"),
+                limits=limits,
                 ambient_temp_model=self.external_models.ambient_temperature_model,
                 grid_voltage_model=self.external_models.grid_voltage_model,
                 grid_frequency_model=self.external_models.grid_frequency_model,
