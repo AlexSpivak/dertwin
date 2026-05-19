@@ -48,4 +48,5 @@ class PVModel:
             temp_inverter=self.inverter.temperature_c,
             power_factor=self.inverter.power_factor_setpoint,
             fault_code=self.inverter.fault_code,
+            active_power_rate_status=self.inverter.active_power_rate,
         )

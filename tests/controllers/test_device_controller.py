@@ -41,6 +41,20 @@ BESS_REGISTERS = [
 
 BESS_MAP = RegisterMap(BESS_REGISTERS)
 
+PV_REGISTER_MAP = RegisterMap([
+        RegisterDefinition(
+            name="active_power_rate",
+            internal_name="active_power_rate",
+            address=3,
+            func=0x06,
+            direction=RegisterDirection.WRITE,
+            type="uint16",
+            count=1,
+            scale=1.0,
+        )
+    ]
+)
+
 
 def write_commands(modbus: ModbusTCPSimulator, register_map: RegisterMap, commands: dict):
     """Helper — write commands directly into Modbus holding registers."""
@@ -177,6 +191,28 @@ def test_controller_inverter_energy_accumulates():
 
     assert pv.today_energy_kwh > 0.0
     assert pv.today_energy_kwh <= 10.0
+
+def test_active_power_rate_affects_output():
+    pv = PVSimulator(rated_kw=10.0)
+    pv.set_irradiance(1000.0)
+    modbus = ModbusTCPSimulator(address="0.0.0.0", port=5021, unit_id=1)
+    controller = DeviceController(device=pv, protocols=[modbus], register_map=PV_REGISTER_MAP)
+
+    assert pv.inverter.active_power_rate == 100
+
+    for _ in range(10):
+        controller.step(dt=1.0)
+
+    assert pv.inverter.active_power_rate == 100
+    full_power = pv.inverter.active_power_w
+
+    write_commands(modbus, PV_REGISTER_MAP, {"active_power_rate": 50})
+    for _ in range(10):
+        controller.step(dt=1.0)
+
+
+    assert pv.inverter.active_power_rate == 50
+    assert pv.inverter.active_power_w < full_power
 
 
 # ============================================================

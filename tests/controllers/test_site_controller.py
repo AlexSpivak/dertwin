@@ -172,16 +172,16 @@ async def test_full_site_modbus_telemetry():
             await client.connect()
 
             register_map = RegisterMap.from_yaml(register_map_root / proto["register_map"])
+            context = controller.protocols[0].context[1]
 
             for r in register_map.reads:
-                response = await client.read_input_registers(address=r.address, count=r.count)
-                assert not response.isError()
-                raw = decode_registers(response.registers, r)
+                response = context.getValues(r.func, r.address, count=r.count)
+                raw = decode_registers(response, r)
                 device_value = controller.device.get_telemetry().to_dict().get(r.name)
                 if device_value is None:
                     continue
                 expected_raw = round(device_value / r.scale)
-                assert raw == expected_raw
+                assert raw == expected_raw, f"for {r.name} in {asset.get("type")}, expected {expected_raw}, got {raw}"
 
             client.close()
 

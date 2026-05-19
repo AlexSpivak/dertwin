@@ -128,6 +128,16 @@ registers:
     scale: 0.1
     unit: V
 
+  - name: active_power_rate_status
+    internal_name: active_power_rate_status
+    address: 3
+    func: 0x03
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: "%"
+
 
   # ==========================================================
   # COMMANDS (WRITE)
@@ -169,5 +179,7 @@ registers:
     address: 5
     func: 0x06
     direction: write
-    type: uint16
+    type: int16          # signed to handle leading/lagging
     count: 1
+    scale: 0.001         # Allows you to input '0.95' and automatically sends '950'
+    unit: ""

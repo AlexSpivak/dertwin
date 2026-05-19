@@ -17,6 +17,7 @@ class PVTelemetry(TelemetryBase):
     temp_inverter: float
     power_factor: float
     fault_code: int
+    active_power_rate_status: int
 
     @classmethod
     def zero(cls) -> "PVTelemetry":
@@ -32,5 +33,6 @@ class PVTelemetry(TelemetryBase):
             lifetime_output_energy=0,
             temp_inverter=0,
             power_factor=0,
-            fault_code=0
+            fault_code=0,
+            active_power_rate_status=100,
         )

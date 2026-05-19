@@ -69,7 +69,7 @@ def write_command_registers(context, unit_id: int, commands: dict, register_map:
                 count=reg_def.count,
                 endian=reg_def.endian,
             )
-            context[unit_id].setValues(3, reg_def.address, words)
+            context[unit_id].setValues(reg_def.func, reg_def.address, words)
         except Exception as e:
             logger.warning("Failed to write command register %s: %s", reg_def.name, e)
 
@@ -83,7 +83,7 @@ def collect_write_instructions(register_map: RegisterMap, context, unit_id: int)
     instructions = {}
     for reg_def in register_map.writes:
         try:
-            raw = context[unit_id].getValues(3, reg_def.address, count=reg_def.count)
+            raw = context[unit_id].getValues(reg_def.func, reg_def.address, count=reg_def.count)
             value = decode_value(
                 registers=list(raw),
                 data_type=reg_def.type,
