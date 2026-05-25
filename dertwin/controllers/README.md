@@ -8,6 +8,7 @@ This package provides:
 - Full site orchestration and lifecycle management (`SiteController`)
 - Integration with protocols (Modbus TCP and Modbus RTU)
 - Coordination with external world models and simulation engine
+- Runtime asset add/remove for live scenario scripting and EMS-in-the-loop testing
 
 ---
 
@@ -104,13 +105,14 @@ High-level site runtime orchestrator. Manages:
 - Simulation engine
 - Devices and their controllers
 - Protocol servers (TCP and RTU)
-- External models (ambient temperature, irradiance, grid voltage/frequency, site power flow)
+- External models (ambient temperature, irradiance, grid voltage/frequency, and site power flow)
 
 ### Responsibilities
 - Build full site from configuration
 - Instantiate devices, controllers, and protocols
 - Wire external models to devices
 - Start and stop the simulation runtime
+- Add or remove assets at runtime (e.g. live demos, scenario scripting, EMS-driven rosters)
 - Manage asyncio tasks for real-time execution
 
 ### Constructor
@@ -121,26 +123,82 @@ SiteController(config: Dict)
 
 ### Lifecycle Methods
 
-`build()`
+**`build()`**
 - Instantiates devices based on `config["assets"]`
-- Creates energy meters last so they can observe all generators
+- Creates non-meter devices first, so the energy meter can observe them via the site power model when it's created
 - Builds device controllers and attaches protocols via `_create_protocol()`
-- Constructs external models — including the `SitePowerModel`, which now aggregates load, PV, BESS, and CHP generation
+- Constructs external models — including the `SitePowerModel`, which aggregates load, PV, BESS, and CHP generation
 - Initializes simulation engine
+- Preserves config order: `site.controllers` appears in the same order as the config's `assets` list
 
-`start()`
-- Launches protocol servers (TCP and RTU)
+**`start()`** *(async)*
+- Launches protocol servers (TCP and RTU) for all assets registered during `build()`
 - Starts real-time engine loop (if enabled)
-- Runs site runtime asynchronously
+- Runs site runtime asynchronously until cancelled
 
-`stop()`
+**`add_asset(spec: Dict)`** *(async)*
+- Registers a new device at runtime, after `build()`, before or after `start()`
+- The site power model picks up the new device automatically on the next tick — no rebuild required
+- If the site is already running, the new asset's protocol server is started immediately
+- Idempotent: re-registering an existing `asset_id` is a no-op
+- Accepts the flat spec shape (see [Configuration Shapes](#configuration-shapes))
+
+**`remove_asset(asset_id: str)`** *(async)*
+- Cancels the asset's protocol task, shuts down its protocol server, removes its device from the site power model
+- Engine keeps running for the remaining assets
+- Removing an unknown `asset_id` is a no-op
+
+**`stop()`** *(async)*
 - Stops engine loop
-- Shuts down protocols gracefully (handles failed RTU serial binds without crashing)
+- Shuts down all protocols gracefully (failed RTU serial binds don't crash the site)
 - Cancels pending asyncio tasks
+
+### Configuration Shapes
+
+`SiteController` accepts two asset-declaration shapes. Both work in `build()`; only the flat shape is accepted by `add_asset()`.
+
+**Legacy shape (multi-protocol library API):**
+
+Each asset declares a `protocols: [...]` list. An asset can expose any number of protocols simultaneously — TCP, RTU, or both.
+
+```json
+{
+  "type": "bess",
+  "protocols": [
+    { "kind": "modbus_tcp", "ip": "0.0.0.0", "port": 55001, "unit_id": 1, "register_map": "bess_modbus.yaml" },
+    { "kind": "modbus_rtu", "port": "/tmp/dertwin_bess", "unit_id": 1 }
+  ]
+}
+```
+
+This is the path used by config-driven `build()` for full-flexibility site definitions and library consumers that need dual-protocol device exposure.
+
+**Flat spec shape (runtime / single-TCP-endpoint):**
+
+A single asset corresponds to a single Modbus TCP endpoint. Endpoint fields are top-level.
+
+```json
+{
+  "asset_id": "bess-01",
+  "type": "bess",
+  "ip": "0.0.0.0",
+  "port": 55001,
+  "unit_id": 1,
+  "capacity_kwh": 100.0,
+  "initial_soc": 60.0
+}
+```
+
+This is the path used by `add_asset()` for runtime registrations (e.g. EMS-driven dynamic asset rosters). It can also appear directly in `build()`'s assets list as a more compact alternative to the legacy shape.
+
+In both shapes:
+- `register_map` is optional. If omitted, a default register map is selected by `type` (e.g. `bess_modbus.yaml` for `bess`).
+- `unit_id` defaults to `1`.
+- `asset_id` is auto-derived from `type` and registration order if omitted; explicit `asset_id` is required if you want to call `remove_asset()` on it later.
 
 ### Protocol Creation
 
-`_create_protocol(proto_cfg)` routes protocol config blocks to the correct simulator class:
+`_create_protocol(proto_cfg)` routes legacy protocol config blocks to the correct simulator class:
 
 | `kind` | Class | Key Parameters |
 |---|---|---|
@@ -151,7 +209,7 @@ Unknown `kind` values raise `ValueError`.
 
 ### Device Creation
 
-`_create_device(asset_cfg)` routes asset config to the correct simulator class:
+`_create_device(spec)` routes asset config to the correct simulator class:
 
 | `type` | Class | Key Parameters |
 |---|---|---|
@@ -164,7 +222,7 @@ Unknown or unsupported asset types raise `ValueError`.
 
 ### Example Usage
 
-**TCP-only site:**
+**Static config build:**
 ```python
 site = SiteController(config=my_site_config)
 site.build()
@@ -175,7 +233,34 @@ await site.start()
 await site.stop()
 ```
 
-**Mixed-protocol site config:**
+**Runtime add/remove (in-process scenario scripting):**
+```python
+site = SiteController(config={"site_name": "demo", "assets": []})
+site.build()
+runtime = asyncio.create_task(site.start())
+
+await site.add_asset({
+    "asset_id": "bess-01", "type": "bess",
+    "ip": "127.0.0.1", "port": 55001, "unit_id": 1,
+    "capacity_kwh": 200.0, "initial_soc": 50.0,
+})
+
+await site.add_asset({
+    "asset_id": "pv-01", "type": "inverter",
+    "ip": "127.0.0.1", "port": 55002, "unit_id": 1,
+    "rated_kw": 20.0,
+})
+
+# ... assets are now exposed via Modbus and contribute to the site power model ...
+
+await site.remove_asset("pv-01")
+
+# ... pv-01 is gone; bess-01 keeps running ...
+
+await site.stop()
+```
+
+**Mixed-protocol site config (legacy shape):**
 ```json
 {
   "assets": [
@@ -223,7 +308,7 @@ await site.stop()
 }
 ```
 
-**Dual-protocol device config (TCP + RTU on one asset):**
+**Dual-protocol device (TCP + RTU on one asset):**
 ```json
 {
   "type": "bess",
@@ -245,12 +330,13 @@ await site.stop()
 - `DeviceController` wraps `SimulatedDevice` implementations
 
 Execution order per tick:
-```markdown
+```
 external_models.update() → DeviceController.step() → clock.tick()
 ```
+
 Telemetry flows from devices → controllers → protocols (TCP, RTU, or both).
 
-`SitePowerModel` aggregates load, PV, BESS, and CHP generation into a single grid power balance. The energy meter observes this balance — it does not need to know which device types contributed to it.
+`SitePowerModel` aggregates load, PV, BESS, and CHP generation into a single grid power balance. The energy meter observes this balance — it does not need to know which device types contributed to it. Dynamic adds and removes flow through automatically because the power model captures the device-type lists by reference rather than snapshotting them at build time.
 
 ---
 
@@ -270,4 +356,5 @@ Both share the same register datastore (`ModbusServerContext`) and the same enco
 - Clear separation of device, protocol, and site layers
 - Graceful shutdown — failed protocol binds don't crash the site
 - Async-safe for real-time operation
+- Dynamic membership — add and remove assets without restarting the site
 - Config-driven and extensible

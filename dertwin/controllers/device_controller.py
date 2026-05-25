@@ -15,7 +15,7 @@ class DeviceController:
         self,
         device: SimulatedDevice,
         protocols: List,
-        register_map: RegisterMap,
+        register_map: RegisterMap | None = None,
     ):
         self.device = device
         self.protocols = protocols

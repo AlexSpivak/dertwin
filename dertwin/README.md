@@ -14,6 +14,7 @@ It provides a full **simulation stack** with:
 - Command and telemetry lifecycle management
 - Modbus TCP and RTU protocol exposure with full FC02/FC03/FC04/FC06/FC10 support
 - Site-level orchestration with external models (ambient temperature, irradiance, grid frequency/voltage, and site power flow)
+- Runtime asset add/remove for scenario-driven testing and EMS-in-the-loop experiments
 
 This repository is intended for **DER research, control testing, and EMS-in-the-loop experiments**.
 
@@ -27,6 +28,7 @@ This repository is intended for **DER research, control testing, and EMS-in-the-
 - **Per-register endianness:** Big-endian (default) or little-endian (Sungrow, Carlo Gavazzi) configurable per register.
 - **Transport-agnostic controllers:** `DeviceController` works identically with TCP, RTU, or both — the protocol layer is fully decoupled from device physics.
 - **Site orchestration:** `SiteController` coordinates multiple devices, external models, and protocol servers across transports.
+- **Dynamic asset membership:** `SiteController.add_asset()` and `remove_asset()` register and deregister devices at runtime. The site power model picks them up automatically — no rebuild required.
 - **Realistic CHP state machine:** MWM TEM Evolution-compatible 20-state machine with configurable startup timings, thermal physics, and FC02 discrete input flags.
 - **Telemetry abstraction:** Standardized telemetry classes (`TelemetryBase`) for consistent reporting across devices.
 - **Clean separation of concerns:** Physical limits, AC/DC coordination, command handling, telemetry, and protocol exposure are clearly layered.
@@ -46,6 +48,8 @@ This repository is intended for **DER research, control testing, and EMS-in-the-
 5. Telemetry is written to Modbus registers (TCP and/or RTU) — routed by function code (FC02 → discrete inputs, FC04 → input registers)
 6. Simulation clock advances
 
+The device-type lists feeding the `SitePowerModel` are mutable by reference. Adding a generator at runtime via `add_asset()` is visible to the site balance and the energy meter on the very next tick.
+
 ---
 
 ## Packages Overview
@@ -60,7 +64,7 @@ This repository is intended for **DER research, control testing, and EMS-in-the-
 ### `controllers/`
 
 - **device_controller.py:** Bridges commands and telemetry between devices and protocols. Transport-agnostic — works with TCP, RTU, or both attached to the same device.
-- **site_controller.py:** Orchestrates site runtime, protocols, external models, and simulation engine. Routes protocol config to the correct simulator class via `_create_protocol()` and asset config via `_create_device()`.
+- **site_controller.py:** Orchestrates site runtime, protocols, external models, and simulation engine. Supports two configuration shapes — the legacy `protocols: [...]` multi-protocol shape (for full-flexibility library use) and the flat single-TCP-endpoint spec shape (for runtime `add_asset()` calls). Routes protocol config to the correct simulator class via `_create_protocol()` and asset config via `_create_device()`.
 
 ### `devices/`
 
@@ -103,13 +107,17 @@ python main.py -c configs/demo_config.json
 ```
 
 ---
+
 ## Simulation Workflow
-- Real-time mode: Runs asynchronously with actual wall-clock timing
-- Deterministic mode: Steps are advanced manually per clock for reproducible simulation
+
+- **Real-time mode:** Runs asynchronously with actual wall-clock timing
+- **Deterministic mode:** Steps are advanced manually per clock for reproducible simulation
+- **Dynamic mode:** Build with an empty asset roster, then add and remove assets at runtime via `SiteController.add_asset()` / `remove_asset()` — useful for live demos, EMS-driven sites, and scenario scripting
 
 ---
+
 ## Detailed information
-- [`controllers`](controllers/README.md) - detailed controllers package architecture overview
+- [`controllers`](controllers/README.md) - detailed controllers package architecture overview, including the dynamic asset API
 - [`core`](core/README.md) - detailed core package architecture overview
 - detailed device simulator overviews:
   - [`bess`](devices/bess/README.md) - detailed BESS package simulation and physics overview

@@ -1715,3 +1715,291 @@ async def test_device_protocol_pairing_multiple_meters():
             await task
         except asyncio.CancelledError:
             pass
+
+# ==========================================================
+# DYNAMIC ASSET MANAGEMENT
+#
+# Tests for add_asset() / remove_asset() — the runtime path used
+# by EMS demo mode. These exercise the flat-spec shape (no
+# 'protocols' wrapper) and verify the power model sees additions
+# and forgets removals on the next tick.
+# ==========================================================
+
+@pytest.mark.asyncio
+async def test_add_asset_after_build_before_start():
+    """Empty build, then add via spec, then start. Asset should run."""
+    cfg = make_config([], base_port=60000)
+    site = SiteController(cfg)
+    site.build()
+    assert len(site.controllers) == 0
+
+    await site.add_asset({
+        "asset_id": "bess-1",
+        "type": "bess",
+        "ip": "127.0.0.1",
+        "port": 60000,
+        "unit_id": 1,
+        "initial_soc": 60.0,
+    })
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(60000)
+        await run_steps(site, 10)
+
+        assert len(site.controllers) == 1
+        bess = get_device(site, BESSSimulator)
+        assert pytest.approx(bess.soc, abs=0.5) == 60.0
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_add_asset_while_running():
+    """Add a second BESS while engine is running. Protocol server must come up."""
+    cfg = make_config([{"type": "bess", "initial_soc": 50.0}], base_port=60010)
+    site = SiteController(cfg)
+    site.build()
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(60010)
+        await run_steps(site, 5)
+        assert len(site.controllers) == 1
+
+        await site.add_asset({
+            "asset_id": "bess-2",
+            "type": "bess",
+            "ip": "127.0.0.1",
+            "port": 60011,
+            "unit_id": 1,
+            "initial_soc": 80.0,
+        })
+
+        # Sim engine ticks faster than wait_ready's poll loop;
+        # give the protocol task a moment to bind.
+        await wait_ready(60011)
+        await run_steps(site, 5)
+
+        assert len(site.controllers) == 2
+        socs = sorted(c.device.soc for c in site.controllers)
+        assert socs[0] == pytest.approx(50.0, abs=0.5)
+        assert socs[1] == pytest.approx(80.0, abs=0.5)
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_remove_asset_while_running():
+    """Remove an asset live. Engine must keep running without it."""
+    cfg = make_config(
+        [{"type": "bess"}, {"type": "inverter"}],
+        base_port=60020,
+    )
+    site = SiteController(cfg)
+    site.build()
+
+    # Both legacy-config-built assets get auto-derived asset_ids
+    # in the order they were registered.
+    asset_ids = list(site._controllers_by_id.keys())
+    pv_asset_id = asset_ids[1]
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(60020)
+        await wait_ready(60021)
+        await run_steps(site, 5)
+        assert len(site.controllers) == 2
+
+        await site.remove_asset(pv_asset_id)
+        await run_steps(site, 5)
+
+        assert len(site.controllers) == 1
+        assert isinstance(site.controllers[0].device, BESSSimulator)
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_add_asset_is_idempotent():
+    """Adding the same asset_id twice is a no-op (no double-wiring)."""
+    cfg = make_config([], base_port=60030)
+    site = SiteController(cfg)
+    site.build()
+
+    spec = {
+        "asset_id": "bess-x",
+        "type": "bess",
+        "ip": "127.0.0.1",
+        "port": 60030,
+        "unit_id": 1,
+    }
+    await site.add_asset(spec)
+    await site.add_asset(spec)  # second call: should be no-op
+
+    assert len(site.controllers) == 1
+    assert len(site._protocols) == 1
+
+
+@pytest.mark.asyncio
+async def test_remove_unknown_asset_is_noop():
+    cfg = make_config([], base_port=60040)
+    site = SiteController(cfg)
+    site.build()
+
+    # Should not raise
+    await site.remove_asset("nonexistent")
+    assert len(site.controllers) == 0
+
+
+@pytest.mark.asyncio
+async def test_remove_then_re_add_same_asset_id():
+    """After removal, re-adding the same asset_id must work cleanly.
+    Verifies that no stale state lingers in _known/_controllers_by_id.
+    This is the demo loop pattern: add → remove → add."""
+    cfg = make_config([], base_port=60050)
+    site = SiteController(cfg)
+    site.build()
+
+    task = asyncio.create_task(site.start())
+    try:
+        spec = {
+            "asset_id": "bess-cycle",
+            "type": "bess",
+            "ip": "127.0.0.1",
+            "port": 60050,
+            "unit_id": 1,
+        }
+        await site.add_asset(spec)
+        await wait_ready(60050)
+        await run_steps(site, 5)
+        assert len(site.controllers) == 1
+
+        await site.remove_asset("bess-cycle")
+        await run_steps(site, 5)
+        assert len(site.controllers) == 0
+
+        # Re-add — different port to avoid TIME_WAIT issues
+        spec_again = dict(spec, port=60051)
+        await site.add_asset(spec_again)
+        await wait_ready(60051)
+        await run_steps(site, 5)
+        assert len(site.controllers) == 1
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_dynamic_pv_feeds_existing_energy_meter():
+    """The critical demo invariant: a PV added at runtime must contribute
+    to the site power model that the energy meter (built earlier) reads.
+
+    This protects against accidentally snapshotting devices_by_type at
+    build time — the power model lambdas must keep seeing new devices."""
+    # No external_models config → build_default() → no IrradianceModel
+    # so pv.set_irradiance() is the only source. base_load defaults to 5 kW.
+    cfg = make_config([{"type": "energy_meter"}], base_port=60060)
+    site = SiteController(cfg)
+    site.build()
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(60060)
+        await run_steps(site, 50)
+
+        meter = get_device(site, EnergyMeterSimulator)
+        baseline_power = meter.get_telemetry().total_active_power
+        assert baseline_power > 0.0, "Meter should import with no generation"
+
+        await site.add_asset({
+            "asset_id": "pv-late",
+            "type": "inverter",
+            "rated_kw": 20.0,
+            "ip": "127.0.0.1",
+            "port": 60061,
+            "unit_id": 1,
+        })
+        await wait_ready(60061)
+
+        pv = get_device(site, PVSimulator)
+        pv.set_irradiance(1000.0)
+        await run_steps(site, 200)
+
+        with_pv_power = meter.get_telemetry().total_active_power
+        assert with_pv_power < baseline_power, (
+            f"Meter must reflect dynamically-added PV. "
+            f"Baseline={baseline_power:.2f} kW, after PV={with_pv_power:.2f} kW"
+        )
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_removed_pv_stops_feeding_meter():
+    """Inverse: removing a generation asset must remove its contribution."""
+    cfg = make_config(
+        [
+            {"type": "energy_meter"},
+            {"type": "inverter", "rated_kw": 20.0},
+        ],
+        base_port=60070,
+    )
+    site = SiteController(cfg)
+    site.build()
+
+    task = asyncio.create_task(site.start())
+    try:
+        await wait_ready(60070)
+        await wait_ready(60071)
+
+        pv = get_device(site, PVSimulator)
+        pv.set_irradiance(1000.0)
+        await run_steps(site, 200)
+
+        meter = get_device(site, EnergyMeterSimulator)
+        with_pv_power = meter.get_telemetry().total_active_power
+        assert with_pv_power < 0.0, "Should be exporting with 20 kW PV vs 5 kW load"
+
+        pv_id = next(
+            aid for aid, c in site._controllers_by_id.items()
+            if isinstance(c.device, PVSimulator)
+        )
+        await site.remove_asset(pv_id)
+        await run_steps(site, 50)
+
+        without_pv_power = meter.get_telemetry().total_active_power
+        assert without_pv_power > 0.0, (
+            f"Meter must show import after PV removal. Got {without_pv_power:.2f} kW"
+        )
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass

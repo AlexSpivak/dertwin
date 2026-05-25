@@ -86,6 +86,48 @@ For a mixed-protocol site (BESS on TCP + PV and meter on RTU), see [Mixed Protoc
 
 ---
 
+## 🔁 Dynamic Asset Membership
+
+In addition to config-driven site definitions, DERTwin's `SiteController` supports adding and removing assets at runtime. Use this for scenario scripts ("at t=300s, a new PV inverter comes online"), live demos, and EMS-driven sites where the asset roster is decided by an external controller.
+
+```python
+from dertwin.controllers.site_controller import SiteController
+import asyncio
+
+# Build an empty site
+site = SiteController({
+    "site_name": "demo",
+    "step": 0.1,
+    "real_time": True,
+    "register_map_root": "configs/register_maps",
+    "assets": [],
+})
+site.build()
+asyncio.create_task(site.start())
+
+# Add an asset live — protocol server starts immediately, site power model picks it up next tick
+await site.add_asset({
+    "asset_id": "bess-01",
+    "type": "bess",
+    "ip": "127.0.0.1",
+    "port": 55001,
+    "unit_id": 1,
+    "capacity_kwh": 200.0,
+    "initial_soc": 50.0,
+})
+
+# ...later, remove it
+await site.remove_asset("bess-01")
+```
+
+Key properties:
+- The site power model captures device lists by reference, so dynamically added generators show up in the energy meter's grid balance on the next tick — no rebuild required.
+- `add_asset` is idempotent: re-registering an existing `asset_id` is a no-op.
+- `remove_asset` cancels the protocol task and shuts down the server cleanly; the engine keeps running for the remaining assets.
+- See [`dertwin/controllers/README.md`](dertwin/controllers/README.md) for the full API and the two supported configuration shapes (legacy `protocols: [...]` for multi-protocol use, flat spec for single-TCP-endpoint runtime use).
+
+---
+
 ## 🧱 Features
 
 - Async Modbus TCP and RTU servers built on `pymodbus`
@@ -95,6 +137,7 @@ For a mixed-protocol site (BESS on TCP + PV and meter on RTU), see [Mixed Protoc
 - Per-register endianness — big-endian default, little-endian for Sungrow/Carlo Gavazzi-style devices
 - Realistic CHP simulation — MWM TEM Evolution-compatible state machine, configurable startup timings, thermal physics, heat output
 - Config-driven site topology — add devices by editing JSON
+- Runtime asset management — `add_asset` / `remove_asset` for live scenario scripting and EMS-driven rosters
 - Irradiance, ambient temperature, grid frequency, and grid voltage models
 - Multi-device support across independent ports
 - External model events (voltage sags, frequency deviations)
@@ -117,7 +160,7 @@ dertwin/
 │   └── mixed_protocol_config.json  # BESS (TCP) + PV (RTU) + meter (RTU)
 ├── dertwin/
 │   ├── core/                # Clock, engine, register map loader
-│   ├── controllers/         # Site and device orchestration
+│   ├── controllers/         # Site and device orchestration (incl. dynamic add/remove)
 │   ├── devices/             # BESS, PV, CHP, energy meter, external models
 │   ├── protocol/            # Modbus TCP + RTU servers
 │   ├── telemetry/           # Telemetry dataclasses
@@ -364,16 +407,14 @@ docker run \
 pytest
 ```
 
-The test suite covers device physics (BESS, PV, CHP, energy meter), register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, and full end-to-end site integration via Modbus. See `tests/` for structure.
+The test suite covers device physics (BESS, PV, CHP, energy meter), register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
 
 ---
 
 ## 📈 Roadmap
 
 - [ ] Scenario engine — scripted event sequences
-- [ ] REST API + web dashboard
-- [ ] IEC 61850 support
-- [ ] MQTT integration
+- [x] Dynamic asset add/remove at runtime
 - [x] CHP support with realistic state machine
 - [x] Modbus FC02 discrete input support
 - [x] Per-register endianness (big/little)
@@ -393,6 +434,8 @@ The test suite covers device physics (BESS, PV, CHP, energy meter), register enc
 - Frequency and voltage response simulation
 - Mixed-protocol site simulation
 - CHP dispatch and startup-sequence testing against EMS
+- Live scenario scripting — bring assets online and offline during a simulation
+- EMS-in-the-loop tests where the asset roster is decided by the controller under test
 
 ---
 
