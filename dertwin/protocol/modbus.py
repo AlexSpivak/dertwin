@@ -3,12 +3,13 @@ import logging
 from typing import Optional
 
 from pymodbus.datastore import ModbusServerContext, ModbusSequentialDataBlock, ModbusDeviceContext
-from pymodbus.server import StartAsyncTcpServer, StartAsyncSerialServer
+from pymodbus.server import ModbusTcpServer, ModbusSerialServer
 
 logger = logging.getLogger(__name__)
 
 # Full 16-bit Modbus address space: 0x0000–0xFFFF
 _MODBUS_REGISTER_COUNT = 65536
+
 
 def create_device_context() -> ModbusDeviceContext:
     di_block = ModbusSequentialDataBlock(0, [0] * _MODBUS_REGISTER_COUNT)
@@ -22,6 +23,8 @@ def create_device_context() -> ModbusDeviceContext:
         ir=ir_block,
         hr=hr_block,
     )
+
+
 # ==========================================================
 # MODBUS TCP
 # ==========================================================
@@ -30,35 +33,10 @@ class ModbusTCPSimulator:
     """
     Asynchronous Modbus TCP server for a single simulated device.
 
-    Uses a TCP socket as the transport layer. Register storage and
-    encode/decode logic are provided by the module-level functions
-    ``write_telemetry_registers``, ``write_command_registers``, and
-    ``collect_write_instructions``.
-
-    Parameters
-    ----------
-    address : str
-        Bind address, e.g. ``"127.0.0.1"`` or ``"0.0.0.0"`` for Docker.
-    port : int
-        TCP port number.
-    unit_id : int
-        Modbus slave / unit identifier (1–247).
-
-    Example
-    -------
-    .. code-block:: python
-
-        import asyncio
-        from dertwin.protocol.modbus import ModbusTCPSimulator
-
-        tcp = ModbusTCPSimulator("127.0.0.1", 5020, unit_id=1)
-
-        async def run():
-            await tcp.run_server()
-            await asyncio.sleep(10)
-            await tcp.shutdown()
-
-        asyncio.run(run())
+    Uses a TCP socket as the transport layer. Holds a direct reference
+    to the underlying ``ModbusTcpServer`` so ``shutdown()`` can close
+    its listening socket cleanly — important for dynamic add/remove
+    cycles where the same port may be re-bound shortly after release.
     """
 
     def __init__(self, address: str, port: int, unit_id: int):
@@ -73,12 +51,19 @@ class ModbusTCPSimulator:
         )
 
         self._task: Optional[asyncio.Task] = None
+        self._server: Optional[ModbusTcpServer] = None
 
     # ---------------------------------------------------------
 
     async def run_server(self):
-        """Start the asynchronous Modbus TCP server."""
+        """Start the asynchronous Modbus TCP server.
 
+        Manages the server lifecycle directly (instead of using
+        ``StartAsyncTcpServer``) so ``shutdown()`` can close the
+        listening socket explicitly via ``server.server_close()`` and
+        ``server.shutdown()``. The previous wrapper-based approach
+        leaked listening sockets across add/remove cycles.
+        """
         logger.info(
             "Starting Modbus TCP server | %s:%s | unit=%s",
             self.address,
@@ -86,35 +71,65 @@ class ModbusTCPSimulator:
             self.unit_id,
         )
 
-        self._task = asyncio.create_task(
-            StartAsyncTcpServer(
-                context=self.context,
-                address=(self.address, self.port),
-            )
+        self._server = ModbusTcpServer(
+            context=self.context,
+            address=(self.address, self.port),
         )
+
+        async def _serve():
+            try:
+                await self._server.serve_forever()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Modbus TCP server crashed | %s:%s", self.address, self.port,
+                )
+                raise
+
+        self._task = asyncio.create_task(_serve())
 
     # ---------------------------------------------------------
 
     async def shutdown(self):
-        """Stop the TCP server and cancel background task."""
+        """Stop the TCP server and release its listening socket.
 
-        if self._task:
-            logger.info(
-                "Stopping Modbus TCP server | %s:%s",
-                self.address,
-                self.port,
-            )
+        Calls ``server.shutdown()`` explicitly to close the
+        ``asyncio.Server`` (and its listening socket) before cancelling
+        the task. Without this, the kernel keeps the port bound for
+        tens of seconds even after the task is gone.
+        """
+        if self._task is None:
+            return
 
-            self._task.cancel()
+        logger.info(
+            "Stopping Modbus TCP server | %s:%s",
+            self.address,
+            self.port,
+        )
 
+        # Close the listening socket and any client connections.
+        if self._server is not None:
             try:
-                await self._task
-            except (asyncio.CancelledError, Exception) as e:
-                if not isinstance(e, asyncio.CancelledError):
-                    logger.warning("Modbus TCP server task ended with error: %s", e)
+                await self._server.shutdown()
+            except Exception:
+                logger.exception(
+                    "Error during pymodbus server shutdown | %s:%s",
+                    self.address, self.port,
+                )
 
-            self._task = None
+        # Cancel the serve task. With the server already closed,
+        # serve_forever() should return cleanly; cancel is belt-and-braces.
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("Modbus TCP server task ended with error: %s", e)
 
+        self._task = None
+        self._server = None
 
 
 # ==========================================================
@@ -126,55 +141,8 @@ class ModbusRTUSimulator:
     Asynchronous Modbus RTU server for a single simulated device.
 
     Uses a serial port (physical or virtual) as the transport layer.
-    Register storage and encode/decode logic are shared with the TCP
-    implementation — reuse ``write_telemetry_registers``,
-    ``write_command_registers``, and ``collect_write_instructions``
-    from ``dertwin.protocol.modbus`` exactly as you would with
-    ``ModbusTCPSimulator``.
-
-    Parameters
-    ----------
-    port : str
-        Serial port path, e.g. ``"/dev/ttyUSB0"`` or a virtual port
-        created by ``socat`` for testing.
-    unit_id : int
-        Modbus slave / unit identifier (1–247).
-    baudrate : int
-        Serial baud rate. Default ``9600``.
-    bytesize : int
-        Number of data bits (5–8). Default ``8``.
-    parity : str
-        Parity setting: ``"N"`` (none), ``"E"`` (even), ``"O"`` (odd).
-        Default ``"N"``.
-    stopbits : int
-        Number of stop bits (1 or 2). Default ``1``.
-    timeout : float
-        Serial read timeout in seconds. Default ``1.0``.
-
-    Example
-    -------
-    .. code-block:: python
-
-        import asyncio
-        from dertwin.protocol.modbus import (
-            ModbusRTUSimulator,
-            write_telemetry_registers,
-            write_command_registers,
-            collect_write_instructions,
-        )
-
-        rtu = ModbusRTUSimulator(
-            port="/dev/ttyUSB0",
-            unit_id=1,
-            baudrate=9600,
-        )
-
-        async def run():
-            await rtu.run_server()
-            await asyncio.sleep(30)
-            await rtu.shutdown()
-
-        asyncio.run(run())
+    Like the TCP simulator, holds a direct reference to the underlying
+    server so ``shutdown()`` can close the serial port cleanly.
     """
 
     def __init__(
@@ -203,12 +171,12 @@ class ModbusRTUSimulator:
         )
 
         self._task: Optional[asyncio.Task] = None
+        self._server: Optional[ModbusSerialServer] = None
 
     # ---------------------------------------------------------
 
     async def run_server(self):
         """Start the asynchronous Modbus RTU serial server."""
-
         logger.info(
             "Starting Modbus RTU server | port=%s | baudrate=%s | unit=%s",
             self.port,
@@ -217,41 +185,60 @@ class ModbusRTUSimulator:
         )
 
         try:
-            self._task = asyncio.create_task(
-                StartAsyncSerialServer(
-                    context=self.context,
-                    port=self.port,
-                    baudrate=self.baudrate,
-                    bytesize=self.bytesize,
-                    parity=self.parity,
-                    stopbits=self.stopbits,
-                    timeout=self.timeout,
-                )
+            self._server = ModbusSerialServer(
+                context=self.context,
+                port=self.port,
+                baudrate=self.baudrate,
+                bytesize=self.bytesize,
+                parity=self.parity,
+                stopbits=self.stopbits,
+                timeout=self.timeout,
             )
         except Exception as e:
             logger.warning(
-                "Failed to create Modbus RTU server task | port=%s | error=%s",
-                self.port,
-                e,
+                "Failed to construct Modbus RTU server | port=%s | error=%s",
+                self.port, e,
             )
+            return
+
+        async def _serve():
+            try:
+                await self._server.serve_forever()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Modbus RTU server crashed | port=%s", self.port,
+                )
+                raise
+
+        self._task = asyncio.create_task(_serve())
 
     # ---------------------------------------------------------
 
     async def shutdown(self):
-        """Stop the serial server and cancel background task."""
+        """Stop the serial server and release its port."""
+        if self._task is None:
+            return
 
-        if self._task:
-            logger.info(
-                "Stopping Modbus RTU server | port=%s",
-                self.port,
-            )
+        logger.info("Stopping Modbus RTU server | port=%s", self.port)
 
-            self._task.cancel()
-
+        if self._server is not None:
             try:
-                await self._task
-            except (asyncio.CancelledError, Exception) as e:
-                if not isinstance(e, asyncio.CancelledError):
-                    logger.warning("Modbus RTU server task ended with error: %s", e)
+                await self._server.shutdown()
+            except Exception:
+                logger.exception(
+                    "Error during pymodbus serial server shutdown | port=%s",
+                    self.port,
+                )
 
-            self._task = None
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("Modbus RTU server task ended with error: %s", e)
+
+        self._task = None
+        self._server = None
