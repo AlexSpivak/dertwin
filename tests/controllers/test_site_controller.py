@@ -2003,3 +2003,38 @@ async def test_removed_pv_stops_feeding_meter():
             await task
         except asyncio.CancelledError:
             pass
+
+@pytest.mark.asyncio
+async def test_add_asset_is_idempotent_while_running():
+    """Calling add_asset twice with the same spec while running must not
+    spawn a second protocol server task on the same port (would fail with
+    address-already-in-use)."""
+    cfg = make_config([], base_port=60035)
+    site = SiteController(cfg)
+    site.build()
+
+    task = asyncio.create_task(site.start())
+    try:
+        spec = {
+            "asset_id": "bess-x",
+            "type": "bess",
+            "ip": "127.0.0.1",
+            "port": 60035,
+            "unit_id": 1,
+        }
+        await site.add_asset(spec)
+        await wait_ready(60035)
+
+        # Second call must be a complete no-op — not even a second task spawned
+        await site.add_asset(spec)
+
+        assert len(site.controllers) == 1
+        assert len(site._protocols) == 1
+        assert len(site._protocol_tasks["bess-x"]) == 1
+    finally:
+        await site.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass

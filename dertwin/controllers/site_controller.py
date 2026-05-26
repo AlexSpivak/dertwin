@@ -232,14 +232,29 @@ class SiteController:
     # ==========================================================
 
     async def add_asset(self, spec: Dict) -> None:
-        """Register a new device at runtime via the flat spec shape.
-        Idempotent — re-registering an existing asset_id is a no-op."""
+        """Register a new device at runtime via the flat spec shape:
+
+        {"asset_id", "type", "ip", "port", "unit_id", ...}
+
+        The legacy `protocols: [{...}]` wrapper is NOT supported here — runtime
+        registration is single-TCP-endpoint only. Use the config-driven build()
+        path for multi-protocol or RTU assets.
+
+        Idempotent: re-registering an existing asset_id is a complete no-op.
+        """
         spec = dict(spec)
         async with self._lock:
+            asset_id = spec.get("asset_id") or self._derive_asset_id(spec)
+            # Snapshot membership BEFORE register so we know if this call
+            # actually creates a new asset or hits the already-registered guard.
+            was_new = asset_id not in self._controllers_by_id
+
             self._register_asset(spec, device=None)
 
-            if self._running:
-                asset_id = spec["asset_id"]
+            # Only start a protocol server task if this was a NEW registration.
+            # Re-publishes (broker fan-out, manual mosquitto_pub, retained replays)
+            # must not spawn duplicate server tasks bound to the same port.
+            if self._running and was_new:
                 for proto in self._protocols_by_id.get(asset_id, []):
                     task = asyncio.create_task(proto.run_server())
                     self._protocol_tasks[asset_id].append(task)
