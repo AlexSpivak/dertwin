@@ -44,7 +44,7 @@ class BESSTelemetry(TelemetryBase):
     working_status: int = 0
     fault_code: int = 0
     local_remote_mode: int = 0
-    power_control_mode: int = 0
+    working_mode: int = 0xAA  # Sungrow encoding: 0xAA=On-grid, 0x55=Off-grid, 0xBB=VSG
 
     @classmethod
     def zero(cls) -> "BESSTelemetry":
@@ -86,5 +86,5 @@ class BESSTelemetry(TelemetryBase):
             working_status=0,
             fault_code=0,
             local_remote_mode=0,
-            power_control_mode=0,
+            working_mode=0xAA,  # On-grid by default, matches ControllerState
         )

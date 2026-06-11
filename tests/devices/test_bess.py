@@ -246,13 +246,6 @@ def test_command_local_remote():
     bess.apply_commands({"local_remote_settings": 2})
     assert bess.local_remote_settings == 2
 
-
-def test_command_power_control_mode():
-    bess = BESSSimulator(ramp_rate_kw_per_s=5.0)
-    bess.apply_commands({"power_control_mode": 1})
-    assert bess.power_control_mode == 1
-
-
 def test_soc_limit_writes():
     bess = BESSSimulator(ramp_rate_kw_per_s=5.0)
 

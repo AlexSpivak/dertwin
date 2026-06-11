@@ -4,12 +4,18 @@ from dertwin.devices.bess.bess import BESSModel
 from dertwin.telemetry.bess import BESSTelemetry
 
 
+WORKING_MODE_ON_GRID = 0xAA
+WORKING_MODE_OFF_GRID = 0x55
+WORKING_MODE_VSG = 0xBB
+VALID_WORKING_MODES = (WORKING_MODE_ON_GRID, WORKING_MODE_OFF_GRID, WORKING_MODE_VSG)
+
+
 @dataclass
 class ControllerState:
-    run_mode: int = 0  # 0=idle, 1=run, 2=standby
+    run_mode: int = 0
     local_remote_settings: int = 0
-    power_control_mode: int = 0
     fault_code: int = 0
+    working_mode: int = WORKING_MODE_ON_GRID
 
 
 class BESSController:
@@ -78,8 +84,10 @@ class BESSController:
         elif name == "local_remote_settings":
             self.state.local_remote_settings = int(value)
 
-        elif name == "power_control_mode":
-            self.state.power_control_mode = int(value)
+        elif name == "working_mode":
+            v = int(value)
+            if v in VALID_WORKING_MODES:
+                self.state.working_mode = v
 
         elif name == "active_power_setpoint":
             if self.state.run_mode == 1 and self.state.fault_code == 0:
@@ -150,6 +158,6 @@ class BESSController:
         telemetry.working_status = self.working_status()
         telemetry.fault_code = self.state.fault_code
         telemetry.local_remote_mode = self.state.local_remote_settings
-        telemetry.power_control_mode = self.state.power_control_mode
+        telemetry.working_mode = self.state.working_mode
 
         return telemetry

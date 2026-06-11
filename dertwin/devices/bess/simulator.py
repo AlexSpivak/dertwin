@@ -130,10 +130,6 @@ class BESSSimulator(SimulatedDevice):
         return self.controller.state.local_remote_settings
 
     @property
-    def power_control_mode(self):
-        return self.controller.state.power_control_mode
-
-    @property
     def fault_code(self):
         return self.controller.state.fault_code
 

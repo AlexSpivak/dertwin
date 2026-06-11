@@ -138,6 +138,22 @@ registers:
   # Faults / Status
   # ----------------------
 
+  # Authoritative follow-signal for the EMS grid-state detector.
+  - name: working_mode
+    internal_name: working_mode
+    address: 10049
+    func: 0x04
+    direction: read
+    type: uint16
+    count: 1
+    scale: 1
+    unit: ""
+    options:
+      0xAA: On-grid
+      0x55: Off-grid
+      0xBB: VSG
+    description: "Inverter actual operating mode (read by EMS as follow-signal)"
+
   - name: working_status
     internal_name: working_status
     address: 10050
@@ -290,17 +306,21 @@ registers:
       2: Local
 
   # ----------------------
-  # Power Control Mode
+  # Working Mode Setpoint
   # ----------------------
 
-  - name: power_control_mode
-    internal_name: power_control_mode
-    address: 10125
+  - name: working_mode_setpoint
+    internal_name: working_mode
+    address: 10124
     func: 0x06
     direction: write
     type: uint16
     count: 1
-    description: "0: Default, 1: On-grid, 2: Off-grid, etc."
+    options:
+      0xAA: On-grid
+      0x55: Off-grid
+      0xBB: VSG
+    description: "Commands inverter mode (bench driver). 0xAA=On-grid, 0x55=Off-grid, 0xBB=VSG."
 
   # ----------------------
   # Active Power Setpoint (kW)
