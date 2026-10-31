@@ -22,6 +22,15 @@ def load_config(path: Path) -> dict:
             register_map_root = path.parent / register_map_root
         config["register_map_root"] = str(register_map_root.resolve())
 
+    # data_root follows the same rule, so CSV inputs (irradiance series and
+    # friends) live next to the config that declared them rather than wherever
+    # dertwin was launched.
+    if "data_root" in config:
+        data_root = Path(config["data_root"])
+        if not data_root.is_absolute():
+            data_root = path.parent / data_root
+        config["data_root"] = str(data_root.resolve())
+
     return config
 
 async def run_site(config_path: Path):

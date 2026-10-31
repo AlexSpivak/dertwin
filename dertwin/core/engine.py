@@ -29,6 +29,7 @@ class SimulationEngine:
         self.clock = clock
         self.external_models = external_models
         self.sim_time = self.clock.time
+        self.utc_time = self.clock.now_utc()
 
         self._running = False
         self._tick_count = 0
@@ -62,13 +63,14 @@ class SimulationEngine:
 
         dt = self.clock.step
         self.sim_time = self.clock.time
+        self.utc_time = self.clock.now_utc()
 
         # =====================================================
         # STEP EXTERNAL FIRST
         # =====================================================
 
         if self.external_models:
-            self.external_models.update(self.sim_time, dt)
+            self.external_models.update(self.utc_time, self.sim_time, dt)
 
         # =====================================================
         # STEP DEVICES

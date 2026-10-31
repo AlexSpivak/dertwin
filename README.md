@@ -138,7 +138,11 @@ Key properties:
 - Realistic CHP simulation — MWM TEM Evolution-compatible state machine, configurable startup timings, thermal physics, heat output
 - Config-driven site topology — add devices by editing JSON
 - Runtime asset management — `add_asset` / `remove_asset` for live scenario scripting and EMS-driven rosters
-- Irradiance, ambient temperature, grid frequency, and grid voltage models
+- Location- and date-aware clear-sky irradiance — correct sunrise, sunset and seasonal peak for any latitude and day of the year
+- Stochastic cloud cover with persistent day-to-day weather regimes, seedable and reproducible
+- Plane-of-array irradiance for tilted, oriented PV arrays, with DC/AC ratio and inverter clipping
+- Irradiance from a CSV, for replaying measured data
+- Ambient temperature, grid frequency, and grid voltage models
 - Multi-device support across independent ports
 - External model events (voltage sags, frequency deviations)
 - Simulation start time control (`start_time_h`) — start at noon, peak load, etc.
@@ -214,7 +218,9 @@ Sites are defined in JSON. Each asset declares its type, parameters, and protoco
 
 **`real_time: true`** — engine runs its own loop, use for `dertwin` CLI and EMS examples
 **`real_time: false`** — caller drives the clock via `step_once()`, use for tests
-**`start_time_h`** — sets simulation clock on startup (e.g. `12.0` for noon). All external models start from this time.
+**`sim_start_utc`** — absolute UTC instant the simulation starts from, ISO 8601 (e.g. `"2025-10-31T00:00:00Z"`). Internal time is always UTC. Required by the clear-sky irradiance model, which has no sun position without a date. Omit it and the clock sits at the Unix epoch, so `start_time_h` keeps its original meaning.
+**`start_time_h`** — offsets the clock on startup (e.g. `12.0` for noon), relative to `sim_start_utc`'s date. All external models start from this time.
+**`data_root`** — path for CSV inputs (`irradiance.series_csv`), resolved relative to the config file. Defaults to the working directory.
 **`register_map_root`** — path to register map directory, resolved relative to the working directory where you run `dertwin`
 **`ip: "0.0.0.0"`** — required when running inside Docker so port mapping works. Use `127.0.0.1` for local-only.
 
@@ -223,9 +229,90 @@ Sites are defined in JSON. Each asset declares its type, parameters, and protoco
 | `type` | Class | Notable parameters |
 |---|---|---|
 | `bess` | `BESSSimulator` | `capacity_kwh`, `initial_soc`, `max_charge_kw`, `max_discharge_kw`, `ramp_rate_kw_per_s` |
-| `inverter` | `PVSimulator` | `rated_kw`, `module_efficiency`, `area_m2` |
+| `inverter` | `PVSimulator` | `rated_kw` / `ac_rating_kw`, `dc_capacity_kw`, `dc_ac_ratio`, `tilt_deg`, `azimuth_deg`, `albedo`, `derate` / `losses`, `module_efficiency`, `area_m2`, `temp_coefficient`, `noct_c` |
 | `chp` | `CHPSimulator` | `rated_kw`, `heat_to_power_ratio`, `min_load_percent`, `max_load_percent` |
 | `energy_meter` | `EnergyMeterSimulator` | (no parameters — observes the site power model) |
+
+### Solar irradiance
+
+Three models, selected by `external_models.irradiance.model`:
+
+| `model` | Behaviour |
+|---|---|
+| `sinusoidal` | The original fixed-shape day: a sine between a configured sunrise and sunset, identical every day of the year everywhere on earth. **The default**, so existing configs are untouched. |
+| `clearsky` | Real solar geometry for the date and location, times a stochastic cloud index. Selected automatically as soon as you give a `latitude`. |
+| `series` | GHI replayed from a CSV. |
+
+```json
+{
+  "sim_start_utc": "2025-10-31T00:00:00Z",
+  "external_models": {
+    "irradiance": {
+      "latitude": 59.3293,
+      "longitude": 18.0686,
+      "timezone": "Europe/Stockholm",
+      "altitude_m": 44.0,
+      "clearsky_model": "ineichen",
+      "linke_turbidity": 3.0,
+      "cloud": {
+        "enabled": true,
+        "model": "ar1",
+        "mean_kt": 0.48,
+        "phi": 0.65,
+        "sigma_day": 0.9,
+        "kt_min": 0.08,
+        "intraday_sigma": 0.07,
+        "intraday_tau_s": 900.0,
+        "seed": 59
+      }
+    }
+  },
+  "assets": [
+    {
+      "type": "inverter",
+      "ac_rating_kw": 30.0,
+      "dc_capacity_kw": 36.0,
+      "tilt_deg": 45.0,
+      "azimuth_deg": 180.0,
+      "derate": 0.86
+    }
+  ]
+}
+```
+
+**`latitude` / `longitude`** — degrees, longitude positive east. Giving a
+latitude is what switches the model on.
+**`timezone`** — label only, for logs and examples. Internal time is always UTC.
+**`clearsky_model`** — `ineichen` (default, adds altitude and turbidity),
+`haurwitz` (elevation only), or `pvlib` (needs `pip install "dertwin[pvlib]"`).
+**`linke_turbidity`** — ~2 very clear, ~3 clear continental, ~5–6 hazy summer.
+**`cloud`** — day-to-day weather regimes as an AR(1) process plus intraday
+Ornstein-Uhlenbeck variability. `phi` sets how long overcast spells last,
+`mean_kt` the long-run clear-sky fraction. On by default once a location is
+given; set `seed` for a reproducible run or `enabled: false` for a cloudless
+sky.
+**`series_csv`** — replay recorded data. With `series_column: "kt"` it drives
+the cloud index and keeps the clear-sky curve; otherwise it is absolute GHI in
+W/m².
+
+What this buys, at Stockholm (59.33 N):
+
+| Date | Daylight | Clear-sky GHI peak |
+|---|---|---|
+| 21 Jun | 18.3 h | ~827 W/m² |
+| 31 Oct | 8.7 h | ~259 W/m² |
+| 21 Dec | 5.7 h | ~87 W/m² |
+
+The `sinusoidal` model gives all three 12.0 h and 1000 W/m².
+
+### PV array orientation
+
+`tilt_deg` and `azimuth_deg` (clockwise from true north; 180 is due south)
+enable plane-of-array transposition. Without a tilt, irradiance is taken as
+already in-plane — the pre-0.2 behaviour. `dc_capacity_kw` (or `dc_ac_ratio`)
+oversizes the array relative to `ac_rating_kw` so the inverter actually clips,
+as real plants do; leave both out and DC/AC stays 1.0 and nothing ever clips.
+See [`dertwin/devices/pv/README.md`](dertwin/devices/pv/README.md).
 
 ### Protocol Configuration
 
@@ -407,7 +494,14 @@ docker run \
 pytest
 ```
 
-The test suite covers device physics (BESS, PV, CHP, energy meter), register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
+The test suite covers device physics (BESS, PV, CHP, energy meter), solar geometry and clear-sky irradiance against published reference values, cloud-model statistics, register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
+
+The built-in solar model is also cross-checked against `pvlib`, which is
+optional, so that suite skips unless you install it:
+
+```bash
+pip install "dertwin[pvlib]"
+```
 
 ---
 

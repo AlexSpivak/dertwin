@@ -1,7 +1,12 @@
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, Dict
 
 from dertwin.devices.external.ambient_temperature import AmbientTemperatureModel
-from dertwin.devices.external.irradiance import IrradianceModel
+from dertwin.devices.external.irradiance import (
+    IrradianceModelBase,
+    build_irradiance_model,
+)
 from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.external.grid_frequency import GridFrequencyModel, ConstantGridFrequencyModel
 from dertwin.devices.external.grid_voltage import GridVoltageModel, ConstantGridVoltageModel
@@ -31,7 +36,7 @@ class ExternalModels:
         grid_frequency_model: Optional[GridFrequencyModel] = None,
         grid_voltage_model: Optional[GridVoltageModel] = None,
         ambient_temperature_model: Optional[AmbientTemperatureModel]=None,
-        irradiance_model: Optional[IrradianceModel]=None,
+        irradiance_model: Optional[IrradianceModelBase]=None,
     ):
         self.power_model = power_model
         self.grid_frequency_model = grid_frequency_model
@@ -43,11 +48,15 @@ class ExternalModels:
     # STEP ALL EXTERNAL MODELS
     # ---------------------------------------------------------
 
-    def update(self, sim_time: float, dt: float) -> None:
+    def update(self, utc_time: datetime, sim_time: float, dt: float) -> None:
         """
         Advance all external world models.
 
         Called once per simulation tick BEFORE devices update.
+
+        `utc_time` is the absolute instant; `sim_time` is seconds since the
+        start of the run. Date-aware models (irradiance) use the former, the
+        event-scheduled grid models the latter.
         """
 
         # Power balance must run first so meter sees correct values
@@ -66,7 +75,7 @@ class ExternalModels:
             self.ambient_temperature_model.update(sim_time, dt)
 
         if self.irradiance_model:
-            self.irradiance_model.update(sim_time, dt)
+            self.irradiance_model.advance(utc_time, sim_time, dt)
 
     @staticmethod
     def build_power_model(devices_by_type, config=None):
@@ -106,7 +115,12 @@ class ExternalModels:
         )
 
     @classmethod
-    def from_config(cls, config: Dict):
+    def from_config(
+        cls,
+        config: Dict,
+        data_root: Optional[Path] = None,
+        sim_start_utc_configured: bool = False,
+    ):
         freq_cfg = config.get("grid_frequency", {})
         volt_cfg = config.get("grid_voltage", {})
         irr_cfg = config.get("irradiance", {})
@@ -127,10 +141,10 @@ class ExternalModels:
                 seed=volt_cfg.get("seed", None),
             ),
 
-            irradiance_model=IrradianceModel(
-                peak_irradiance_w_m2=irr_cfg.get("peak", 1000.0),
-                sunrise_hour=irr_cfg.get("sunrise", 6.0),
-                sunset_hour=irr_cfg.get("sunset", 18.0),
+            irradiance_model=build_irradiance_model(
+                irr_cfg,
+                data_root=data_root,
+                sim_start_utc_configured=sim_start_utc_configured,
             ),
 
             ambient_temperature_model=AmbientTemperatureModel(
