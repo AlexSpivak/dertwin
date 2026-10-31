@@ -1,4 +1,6 @@
 import asyncio
+import difflib
+import inspect
 import logging
 import warnings
 from pathlib import Path
@@ -8,7 +10,7 @@ from dertwin.core.clock import SimulationClock
 from dertwin.core.engine import SimulationEngine
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap
-from dertwin.devices.bess.battery import BatteryLimits
+from dertwin.devices.bess.battery import LIMIT_MODE_HARD, BatteryLimits
 from dertwin.devices.bess.simulator import BESSSimulator
 from dertwin.devices.chp.simulator import CHPSimulator
 from dertwin.devices.pv.simulator import PVSimulator
@@ -24,6 +26,26 @@ DEFAULT_REGISTER_MAPS = {
     "inverter": "pv_inverter_modbus.yaml",
     "energy_meter": "energy_meter_modbus.yaml",
     "chp": "chp_modbus.yaml",
+}
+
+# Asset keys that describe topology, protocol binding or documentation rather
+# than device physics. Everything else must be a kwarg the device accepts.
+_STRUCTURAL_ASSET_KEYS = frozenset({
+    "type", "name", "comment", "description", "asset_id", "register_map",
+    "protocols", "kind", "ip", "host", "port", "unit_id",
+    "baudrate", "bytesize", "parity", "stopbits", "timeout",
+})
+
+# Per-type config keys that are reshaped before reaching the constructor.
+_EXTRA_ASSET_KEYS = {
+    "bess": frozenset({"soc_limits"}),
+}
+
+_DEVICE_CLASSES = {
+    "bess": BESSSimulator,
+    "inverter": PVSimulator,
+    "chp": CHPSimulator,
+    "energy_meter": EnergyMeterSimulator,
 }
 
 
@@ -47,6 +69,7 @@ class SiteController:
     def __init__(self, config: Dict):
         self.config = config
         self.register_map_root = Path(config.get("register_map_root", "."))
+        self.state_root = Path(config.get("state_root", "."))
 
         self.clock = SimulationClock(
             step=config.get("step", 0.1),
@@ -383,6 +406,8 @@ class SiteController:
         if self.engine:
             self.engine.stop()
 
+        self.save_device_state()
+
         for asset_id, protocols in self._protocols_by_id.items():
             for proto in protocols:
                 try:
@@ -401,11 +426,71 @@ class SiteController:
 
         self._running = False
 
+    def save_device_state(self) -> None:
+        """Flush persistent device state. Devices without it are skipped."""
+        for device in self._devices_by_type.get("bess", []):
+            save = getattr(device, "save_state", None)
+            if save is not None:
+                save()
+
     # ==========================================================
     # DEVICE FACTORY
     # ==========================================================
 
+    @staticmethod
+    def _allowed_asset_keys(dtype: str) -> frozenset:
+        """Structural keys plus whatever the device constructor accepts."""
+        device_cls = _DEVICE_CLASSES[dtype]
+        params = set(inspect.signature(device_cls.__init__).parameters) - {"self"}
+        return (
+            frozenset(params)
+            | _STRUCTURAL_ASSET_KEYS
+            | _EXTRA_ASSET_KEYS.get(dtype, frozenset())
+        )
+
+    def _validate_asset_spec(self, spec: Dict) -> None:
+        """
+        Reject unknown asset keys instead of silently ignoring them.
+
+        A typo'd key used to vanish without a word, which is a bad way to find
+        out your battery never got the limits you configured.
+        """
+        dtype = spec.get("type")
+
+        if dtype not in _DEVICE_CLASSES:
+            raise ValueError(f"Unknown asset type: {dtype}")
+
+        allowed = self._allowed_asset_keys(dtype)
+        unknown = sorted(set(spec) - allowed)
+
+        if not unknown:
+            return
+
+        hints = []
+        for key in unknown:
+            close = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.7)
+            hints.append(
+                f"'{key}'" + (f" (did you mean '{close[0]}'?)" if close else "")
+            )
+
+        raise ValueError(
+            f"Unknown config key(s) for asset type '{dtype}': " + ", ".join(hints)
+        )
+
+    def _resolve_state_file(self, spec: Dict) -> Optional[str]:
+        state_file = spec.get("state_file")
+        if not state_file:
+            return None
+
+        state_path = Path(state_file)
+        if not state_path.is_absolute():
+            state_path = self.state_root / state_path
+
+        return str(state_path)
+
     def _create_device(self, spec: Dict):
+        self._validate_asset_spec(spec)
+
         dtype = spec["type"]
 
         if dtype == "bess":
@@ -428,6 +513,17 @@ class SiteController:
                 thermal_capacity_j_per_k=spec.get("thermal_capacity_j_per_k"),
                 thermal_conductance_w_per_k=spec.get("thermal_conductance_w_per_k"),
                 limits=limits,
+                limit_mode=spec.get("limit_mode", LIMIT_MODE_HARD),
+                soc_min_percent=spec.get("soc_min_percent"),
+                soc_max_percent=spec.get("soc_max_percent"),
+                charge_efficiency=spec.get("charge_efficiency"),
+                discharge_efficiency=spec.get("discharge_efficiency"),
+                self_discharge_percent_per_day=spec.get(
+                    "self_discharge_percent_per_day", 0.0
+                ),
+                state_file=self._resolve_state_file(spec),
+                state_save_interval_s=spec.get("state_save_interval_s", 60.0),
+                asset_id=spec.get("asset_id") or spec.get("name") or dtype,
                 ambient_temp_model=self.external_models.ambient_temperature_model,
                 grid_voltage_model=self.external_models.grid_voltage_model,
                 grid_frequency_model=self.external_models.grid_frequency_model,

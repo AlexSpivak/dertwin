@@ -1,3 +1,11 @@
+"""
+Capability-limit tests.
+
+The two soft-derating tests pass limit_mode="taper" explicitly: tapering is the
+legacy behaviour and is no longer the default. Hard-stop behaviour has its own
+suite in test_battery_hard_stop.py.
+"""
+
 import pytest
 from dertwin.devices.bess.battery import BatteryModel, BatteryLimits
 
@@ -32,6 +40,7 @@ def test_soft_discharge_derating():
         initial_soc=22.5,
         limits=limits,
         max_discharge_kw=10,
+        limit_mode="taper",
     )
 
     applied = battery.step(10, 1.0)
@@ -52,6 +61,7 @@ def test_soft_charge_derating():
         initial_soc=87.5,
         limits=limits,
         max_charge_kw=10,
+        limit_mode="taper",
     )
 
     applied = battery.step(-10, 1.0)

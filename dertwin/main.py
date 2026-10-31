@@ -22,6 +22,14 @@ def load_config(path: Path) -> dict:
             register_map_root = path.parent / register_map_root
         config["register_map_root"] = str(register_map_root.resolve())
 
+    # state_root follows the same rule, so BESS state files live next to the
+    # config that declared them rather than wherever dertwin was launched.
+    if "state_root" in config:
+        state_root = Path(config["state_root"])
+        if not state_root.is_absolute():
+            state_root = path.parent / state_root
+        config["state_root"] = str(state_root.resolve())
+
     return config
 
 async def run_site(config_path: Path):

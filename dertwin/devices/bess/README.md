@@ -12,17 +12,64 @@ Responsible for deterministic energy behavior:
 - Energy tracking (kWh)
 - State of Charge (SOC)
 - Charge / discharge efficiency
-- SOC-based power limits:
-  - Hard cutoffs
-  - Linear derating regions
+- SOC-based power limits (hard stop, or legacy linear derating)
+- Optional self-discharge
 - Thermal model
 - Cycle counting
 - State of health tracking
+- Persistable state snapshot
 
 The battery model:
 - Does not know about ramping
 - Does not know about protocols
 - Only applies physical constraints
+
+#### SOC limits
+
+`limit_mode` selects how the SOC window is defended.
+
+**`"hard"` (default)** — no tapering anywhere. In the step that would cross a
+limit, power is clamped so SOC lands *exactly* on it; from then on power is
+exactly `0.0` while the setpoint keeps pushing that way. The allowed power is
+computed from the energy headroom, not from a scale factor:
+
+```
+charge:     P_allowed = -min(|P|, (E_max - E) / (eta_c · dt))
+discharge:  P_allowed = +min( P,  (E - E_min) · eta_d / dt)
+```
+
+`soc_min_percent` / `soc_max_percent` set the window. When they are omitted it
+follows `soc_limits.lower_2` / `soc_limits.upper_2`, which is also what the
+Modbus `soc_lower_limit_2` / `soc_upper_limit_2` commands write — so an EMS can
+move the hard limits at runtime. The `_1` thresholds are accepted and ignored.
+
+**`"taper"`** — the pre-0.2 behaviour: a linear charge/discharge derating ramp
+between the `_1` and `_2` thresholds, with the hard cutoff at `_2`.
+
+#### Efficiency
+
+A configured `round_trip_eff` is actually realised, because charging stores
+less than arrives at AC and discharging drains more than reaches AC:
+
+```
+charge:     dE = +P_ac · eta_c · dt
+discharge:  dE = -P_ac / eta_d · dt
+```
+
+`eta_c = eta_d = sqrt(round_trip_eff)` unless `charge_efficiency` /
+`discharge_efficiency` are given, which override it per direction. Before 0.2
+both legs multiplied, so the realised round-trip efficiency was silently 1.0
+whatever was configured.
+
+Energy counters (`total_charge_energy`, `total_discharge_energy`) are
+battery-side — what actually moved in and out of the pack — which is what the
+cycle counter and SOH are defined against.
+
+#### Self-discharge
+
+`self_discharge_percent_per_day` is a passive loss applied every step, floored
+at the hard discharge limit: a BMS defends its reserve rather than letting idle
+losses walk through it. Off by default.
 
 ### inverter.py
 **AC-side power control model**
@@ -49,15 +96,20 @@ Coordinates battery and inverter behavior into a single physical plant.
 
 On each simulation step:
 
-- Receives inverter target power
-- Applies battery SOC limits
-- Updates inverter ramped output
-- Integrates battery energy
-- Produces composed telemetry
+1. The inverter ramps toward the setpoint — the setpoint itself is never
+   rewritten, so dispatch resumes on its own once the pack has headroom again
+2. The battery clamps that ramped value: rating, temperature capability and the
+   hard SOC window are all applied in one place
+3. The inverter is synced to the power the battery actually accepted
+4. Composed telemetry is produced
+
+Step 3 matters: without it the next ramp step would start from a value the pack
+never delivered, and reactive/apparent power would be derived from it too.
 
 This layer ensures:
-- SOC protection happens before ramp execution
-- Actual power is always physically consistent
+- The battery is the single clamp authority
+- Reported active, reactive and apparent power all follow actual power
+- The site power balance and meter see actual power, not the setpoint
 - Telemetry represents real internal state
 
 `BESSModel` acts as the physical plant abstraction.
@@ -90,13 +142,29 @@ Provides:
 - Exposing Modbus-accessible values
 - Startup initialization
 - Telemetry publishing
+- Optional SOC persistence
 
 This is the entry point used by site-level simulations.
+
+### state.py
+
+**Optional SOC persistence**
+
+Opt-in: with no `state_file` nothing is read or written. When set, SOC and the
+lifetime counters survive a restart instead of cold-starting at `initial_soc`.
+
+- Written atomically (temp file + `os.replace`) every
+  `state_save_interval_s` and once more on `SiteController.stop()`
+- Versioned JSON; a file with an unknown `schema` is ignored
+- First boot, an unreadable file, bad JSON or missing fields all fall back to
+  the configured `initial_soc` and log *why* — first boot at `INFO`, every
+  other case at `WARNING`
+- A changed `capacity_kwh` preserves SOC and rescales energy, with a `WARNING`
 
 ## Architectural Principles
 
 The BESS package follows strict separation of concerns:
-- BatteryModel → DC physics and limits
+- BatteryModel → DC physics, efficiency and the SOC window
 - InverterModel → AC control and ramp behavior
 - BESSModel → Physical coordination
 - Controller → Command lifecycle management

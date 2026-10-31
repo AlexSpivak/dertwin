@@ -40,6 +40,17 @@ class InverterModel:
     def set_target_power(self, power_kw: float):
         self.target_power = power_kw
 
+    def sync_actual(self, power_kw: float):
+        """
+        Align internal state with the power the battery actually accepted.
+
+        Without this the next ramp step would start from a value the pack never
+        delivered, and reactive/apparent power would be derived from it too.
+        The setpoint in target_power is left untouched, so dispatch resumes on
+        its own once the battery has headroom again.
+        """
+        self._current_power = float(power_kw)
+
     def step(self, dt: float) -> float:
         delta = self._target_power - self._current_power
         max_delta = self.ramp_rate * dt

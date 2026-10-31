@@ -33,7 +33,7 @@ def test_temperature_increases_under_load():
     # ENERGY UPDATE
     # ---------------------------------------------------------
     dt_h = dt / 3600.0
-    delta_kwh = -(power_kw * battery.discharge_eff * dt_h)
+    delta_kwh = -(power_kw / battery.discharge_eff * dt_h)
 
     new_energy = max(
         0.0,
