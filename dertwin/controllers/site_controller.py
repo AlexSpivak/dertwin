@@ -395,7 +395,11 @@ class SiteController:
             try:
                 await self._engine_task
             except asyncio.CancelledError:
+                # Re-raised, not absorbed: the caller owns shutdown, and
+                # swallowing the cancellation here left stop() unreachable on
+                # Ctrl-C, so persistent state was never flushed.
                 logger.info("Engine task cancelled")
+                raise
 
     async def stop(self):
         if not self._running:
