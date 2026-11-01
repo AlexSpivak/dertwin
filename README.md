@@ -164,7 +164,9 @@ dertwin/
 │   ├── simple_config.json          # Single BESS — good starting point
 │   ├── demo_config.json            # BESS + PV + meter
 │   ├── full_site_config.json       # BESS + BESS + PV + CHP + meter + external models
-│   └── mixed_protocol_config.json  # BESS (TCP) + PV (RTU) + meter (RTU)
+│   ├── mixed_protocol_config.json  # BESS (TCP) + PV (RTU) + meter (RTU)
+│   ├── stockholm_site_config.json  # Northern Europe, 59.33 N — clear-sky PV, clouds, stochastic load
+│   └── kyiv_site_config.json       # Ukraine, 50.45 N — same code, different place
 ├── dertwin/
 │   ├── core/                # Clock, engine, register map loader
 │   ├── controllers/         # Site and device orchestration (incl. dynamic add/remove)
@@ -176,7 +178,9 @@ dertwin/
 │   ├── simple/              # Single BESS EMS example
 │   ├── full/                # Multi-device EMS example with CHP (TCP)
 │   ├── mixed/               # Mixed-protocol EMS example (TCP + RTU)
+│   ├── seasonal/            # Print a simulated day from a location-aware config
 │   └── protocol/            # Shared Modbus TCP and RTU clients
+├── state/                   # BESS SOC state files (gitignored)
 ├── tests/                   # Full test suite
 ├── generate_compose.py      # Docker Compose generator
 ├── docker-entrypoint.sh     # Container entrypoint (socat + RTU bridge)
@@ -239,6 +243,49 @@ Unknown asset keys are rejected at build time with a "did you mean" hint, so a t
 | `inverter` | `PVSimulator` | `rated_kw` / `ac_rating_kw`, `dc_capacity_kw`, `dc_ac_ratio`, `tilt_deg`, `azimuth_deg`, `albedo`, `derate` / `losses`, `module_efficiency`, `area_m2`, `temp_coefficient`, `noct_c` |
 | `chp` | `CHPSimulator` | `rated_kw`, `heat_to_power_ratio`, `min_load_percent`, `max_load_percent` |
 | `energy_meter` | `EnergyMeterSimulator` | (no parameters — observes the site power model) |
+
+### Location-aware example sites
+
+Two complete sites, config-only — nothing in `dertwin/` knows about either
+place, and a test guards that:
+
+| Config | Place | Plant |
+|---|---|---|
+| [`configs/stockholm_site_config.json`](configs/stockholm_site_config.json) | Stockholm, 59.33 N | 40 kW DC / 30 kW AC at 45°, 120 kWh BESS |
+| [`configs/kyiv_site_config.json`](configs/kyiv_site_config.json) | Kyiv, 50.45 N | 36 kW DC / 30 kW AC at 35°, 100 kWh BESS |
+
+Print a simulated day from either, with no dependencies beyond the standard
+library:
+
+```bash
+python examples/seasonal/plot_day.py stockholm --clear
+```
+
+```
+    UTC   elev     GHI     POA      PV    load     grid    SOC
+           deg    W/m2    W/m2      kW      kW       kW      %
+  ------------------------------------------------------------
+  08:00   10.7   163.4   435.3   16.01   51.57    35.66   55.0
+  10:00   16.6   269.1   666.3   23.62   52.57    28.97   55.0
+  12:00   14.6   233.6   590.1   21.00   55.84    34.78   54.9
+  14:00    5.6    81.8   213.7    7.95   47.51    39.40   54.9
+
+  GHI              ▁▂▄▅▆▇▇████▇▇▆▅▄▂▁                    peak 274.1
+```
+
+Clear-sky resource on the same three dates — this is what the geography buys:
+
+| | Stockholm | Kyiv |
+|---|---|---|
+| Daylight, 31 Oct | 8.72 h | 9.68 h |
+| Daylight, 21 Jun | 18.28 h | 16.23 h |
+| Daylight, 21 Dec | 5.73 h | 7.78 h |
+| GHI peak, 31 Oct | 274 W/m² | 411 W/m² |
+| GHI peak, 21 Jun | 839 W/m² | 905 W/m² |
+| GHI peak, 21 Dec | 108 W/m² | 239 W/m² |
+
+See [`examples/seasonal/README.md`](examples/seasonal/README.md) for what the
+two *plants* then do with that resource, which is a different question.
 
 ### BESS SOC limits, efficiency and persistence
 
@@ -632,6 +679,11 @@ pip install "dertwin[pvlib]"
 ## 📈 Roadmap
 
 - [ ] Scenario engine — scripted event sequences
+- [ ] Markov-regime cloud model as an alternative to AR(1)
+- [x] Location- and date-aware clear-sky irradiance with cloud cover
+- [x] Plane-of-array irradiance, DC/AC ratio and inverter clipping
+- [x] Stochastic site load with daily profile and drift
+- [x] Hard BESS SOC limits with optional persistence
 - [x] Dynamic asset add/remove at runtime
 - [x] CHP support with realistic state machine
 - [x] Modbus FC02 discrete input support

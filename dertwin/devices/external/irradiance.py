@@ -237,13 +237,18 @@ class ClearSkyIrradianceModel(IrradianceModelBase):
         ghi = max(0.0, clear_sky * kt)
         dni, dhi = solar.erbs_split(ghi, position, utc_time)
 
-        self._components = IrradianceComponents(
-            ghi=ghi,
-            dni=dni,
-            dhi=dhi,
-            position=position,
-            clear_sky_ghi=clear_sky,
-            clear_sky_index=kt,
+        self._components = solar.limit_beam_to_clear_sky(
+            IrradianceComponents(
+                ghi=ghi,
+                dni=dni,
+                dhi=dhi,
+                position=position,
+                clear_sky_ghi=clear_sky,
+                clear_sky_index=kt,
+            ),
+            utc_time,
+            altitude_m=self.altitude_m,
+            linke_turbidity=self.linke_turbidity,
         )
 
     def get_components(self) -> IrradianceComponents:
@@ -265,11 +270,15 @@ class SeriesIrradianceModel(IrradianceModelBase):
         latitude: float,
         longitude: float,
         series: TimeSeries,
+        altitude_m: float = 0.0,
+        linke_turbidity: float = 3.0,
         timezone_name: Optional[str] = None,
     ):
         self.latitude = latitude
         self.longitude = longitude
         self.series = series
+        self.altitude_m = altitude_m
+        self.linke_turbidity = linke_turbidity
         self.timezone_name = timezone_name
 
         self._components = IrradianceComponents.dark()
@@ -286,13 +295,18 @@ class SeriesIrradianceModel(IrradianceModelBase):
         ghi = float(value)
         dni, dhi = solar.erbs_split(ghi, position, utc_time)
 
-        self._components = IrradianceComponents(
-            ghi=ghi,
-            dni=dni,
-            dhi=dhi,
-            position=position,
-            clear_sky_ghi=ghi,
-            clear_sky_index=1.0,
+        self._components = solar.limit_beam_to_clear_sky(
+            IrradianceComponents(
+                ghi=ghi,
+                dni=dni,
+                dhi=dhi,
+                position=position,
+                clear_sky_ghi=ghi,
+                clear_sky_index=1.0,
+            ),
+            utc_time,
+            altitude_m=self.altitude_m,
+            linke_turbidity=self.linke_turbidity,
         )
 
     def get_components(self) -> IrradianceComponents:
@@ -385,6 +399,8 @@ def build_irradiance_model(
             latitude=latitude,
             longitude=longitude,
             series=_build_series(cfg, data_root),
+            altitude_m=cfg.get("altitude_m", 0.0),
+            linke_turbidity=cfg.get("linke_turbidity", 3.0),
             timezone_name=timezone_name,
         )
 

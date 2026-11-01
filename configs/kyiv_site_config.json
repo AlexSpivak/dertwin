@@ -1,0 +1,153 @@
+{
+  "site_name": "kyiv-autumn",
+  "comment": "Ukraine example — 50.45 N. Same date and the same model as the Stockholm config; only the numbers differ, which is the point: nothing in dertwin/ knows about either place.",
+
+  "step": 1.0,
+  "real_time": true,
+  "sim_start_utc": "2025-10-31T00:00:00Z",
+  "register_map_root": "register_maps",
+  "state_root": "../state",
+
+  "external_models": {
+    "irradiance": {
+      "comment": "Kyiv. Nine degrees further south than Stockholm: an hour more daylight and a clear-sky peak around 60% higher on the same day.",
+      "latitude": 50.4501,
+      "longitude": 30.5234,
+      "timezone": "Europe/Kyiv",
+      "altitude_m": 179.0,
+      "clearsky_model": "ineichen",
+      "linke_turbidity": 3.2,
+      "cloud": {
+        "enabled": true,
+        "model": "ar1",
+        "mean_kt": 0.55,
+        "phi": 0.65,
+        "sigma_day": 0.9,
+        "kt_min": 0.08,
+        "intraday_sigma": 0.07,
+        "intraday_tau_s": 900.0,
+        "seed": 50
+      }
+    },
+
+    "ambient_temperature": {
+      "comment": "Kyiv end of October: around 9 C, swinging 6 K about mid-afternoon.",
+      "mean": 9.0,
+      "amplitude": 6.0,
+      "peak_hour": 14.0
+    },
+
+    "load": {
+      "comment": "50 kW average site with a flatter evening peak than the Nordic one, and a milder weekend drop.",
+      "base_kw": 50.0,
+      "profile": {
+        "model": "parametric",
+        "parametric": {
+          "night_factor": 0.6,
+          "morning_peak_hour": 9.0,
+          "morning_peak_factor": 1.15,
+          "evening_peak_hour": 19.0,
+          "evening_peak_factor": 1.3,
+          "peak_width_h": 4.0
+        },
+        "normalize": true
+      },
+      "weekday_factor": 1.0,
+      "weekend_factor": 0.8,
+      "drift": {
+        "enabled": true,
+        "sigma": 0.12,
+        "tau_s": 10800.0,
+        "min_factor": 0.7,
+        "max_factor": 1.3
+      },
+      "noise": {
+        "enabled": true,
+        "sigma": 0.025,
+        "tau_s": 30.0
+      },
+      "min_kw": 0.0,
+      "seed": 50
+    },
+
+    "grid_frequency": {
+      "nominal_hz": 50.0,
+      "noise_std": 0.003,
+      "drift_std": 0.0003,
+      "seed": 50
+    },
+
+    "grid_voltage": {
+      "nominal_voltage_ll": 400.0,
+      "noise_std": 0.6,
+      "drift_std": 0.06,
+      "seed": 50
+    }
+  },
+
+  "assets": [
+    {
+      "comment": "36 kW DC on a 30 kW inverter (DC/AC 1.2) at a 35 degree south-facing tilt — shallower than Stockholm because the sun gets higher here.",
+      "type": "inverter",
+      "ac_rating_kw": 30.0,
+      "dc_capacity_kw": 36.0,
+      "tilt_deg": 35.0,
+      "azimuth_deg": 180.0,
+      "albedo": 0.2,
+      "losses": {
+        "soiling": 0.97,
+        "wiring": 0.98,
+        "mismatch": 0.98,
+        "availability": 0.99
+      },
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55201,
+          "unit_id": 1,
+          "register_map": "pv_inverter_modbus.yaml"
+        }
+      ]
+    },
+    {
+      "comment": "100 kWh battery in a hard 10-95% window, with SOC persistence.",
+      "type": "bess",
+      "asset_id": "kyiv-bess",
+      "capacity_kwh": 100.0,
+      "initial_soc": 55.0,
+      "soc_min_percent": 10.0,
+      "soc_max_percent": 95.0,
+      "limit_mode": "hard",
+      "max_charge_kw": 50.0,
+      "max_discharge_kw": 50.0,
+      "ramp_rate_kw_per_s": 10.0,
+      "round_trip_eff": 0.9,
+      "self_discharge_percent_per_day": 0.1,
+      "state_file": "kyiv-bess.json",
+      "state_save_interval_s": 60.0,
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55202,
+          "unit_id": 1,
+          "register_map": "bess_modbus.yaml"
+        }
+      ]
+    },
+    {
+      "comment": "Site meter at the point of common coupling.",
+      "type": "energy_meter",
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55203,
+          "unit_id": 1,
+          "register_map": "energy_meter_modbus.yaml"
+        }
+      ]
+    }
+  ]
+}

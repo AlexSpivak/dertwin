@@ -325,3 +325,96 @@ async def test_pv_offsets_the_load_and_can_push_the_site_to_export():
 
     meter = site._devices_by_type["energy_meter"][0]
     assert meter.get_telemetry().total_export_energy > 0.0
+
+
+# ------------------------------------------------------------
+# Composing with the absolute clock
+# ------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_a_configured_date_drives_the_weekday_factor():
+    """
+    2025-11-01 is a Saturday, so the weekend factor applies on the first tick
+    even though start_weekday is left at its Monday default.
+    """
+    site = SiteController({
+        "site_name": "load-calendar",
+        "step": STEP_S,
+        "real_time": False,
+        "sim_start_utc": "2025-11-01T00:00:00Z",
+        "external_models": {
+            "load": {"base_kw": 100.0, "weekday_factor": 1.0,
+                     "weekend_factor": 0.5},
+        },
+        "assets": [{"type": "energy_meter"}],
+    })
+    site.build()
+
+    history = await run_ticks(site, 1)
+    assert history[0]["meter_kw"] == pytest.approx(50.0)
+
+    # Monday 2025-11-03 is a working day again
+    site = SiteController({
+        "site_name": "load-calendar",
+        "step": STEP_S,
+        "real_time": False,
+        "sim_start_utc": "2025-11-03T00:00:00Z",
+        "external_models": {
+            "load": {"base_kw": 100.0, "weekday_factor": 1.0,
+                     "weekend_factor": 0.5},
+        },
+        "assets": [{"type": "energy_meter"}],
+    })
+    site.build()
+
+    history = await run_ticks(site, 1)
+    assert history[0]["meter_kw"] == pytest.approx(100.0)
+
+
+@pytest.mark.asyncio
+async def test_a_configured_date_overrides_start_weekday(caplog):
+    import logging
+
+    cfg = {
+        "site_name": "load-calendar",
+        "step": STEP_S,
+        "real_time": False,
+        "sim_start_utc": "2025-11-01T00:00:00Z",  # Saturday
+        "external_models": {
+            "load": {
+                "base_kw": 100.0,
+                "weekday_factor": 1.0,
+                "weekend_factor": 0.5,
+                "start_weekday": "monday",
+            },
+        },
+        "assets": [{"type": "energy_meter"}],
+    }
+
+    site = SiteController(cfg)
+    with caplog.at_level(logging.INFO):
+        site.build()
+
+    history = await run_ticks(site, 1)
+
+    assert history[0]["meter_kw"] == pytest.approx(50.0)
+    assert "start_weekday is ignored" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_without_a_configured_date_start_weekday_still_wins():
+    """
+    The default clock sits on the Unix epoch, which happens to be a Thursday.
+    That is an implementation artefact, not a date anyone chose, so it must not
+    quietly override start_weekday.
+    """
+    site = build_site({
+        "base_kw": 100.0,
+        "weekday_factor": 1.0,
+        "weekend_factor": 0.5,
+        "start_weekday": "saturday",
+    })
+
+    history = await run_ticks(site, 1)
+
+    assert history[0]["meter_kw"] == pytest.approx(50.0)

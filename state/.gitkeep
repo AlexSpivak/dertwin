@@ -1,0 +1,2 @@
+# BESS state files land here (see state_root in the example configs).
+# The files themselves are gitignored; this keeps the directory.
