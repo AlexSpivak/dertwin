@@ -130,6 +130,7 @@ class SiteController:
         self.external_models.power_model = ExternalModels.build_power_model(
             self._devices_by_type,
             self.config.get("external_models"),
+            load_model=self.external_models.load_model,
         )
 
         self.engine = SimulationEngine(

@@ -7,6 +7,11 @@ from dertwin.devices.external.irradiance import (
     IrradianceModelBase,
     build_irradiance_model,
 )
+from dertwin.devices.external.load import (
+    DEFAULT_BASE_KW,
+    SiteLoadModel,
+    build_load_model,
+)
 from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.external.grid_frequency import GridFrequencyModel, ConstantGridFrequencyModel
 from dertwin.devices.external.grid_voltage import GridVoltageModel, ConstantGridVoltageModel
@@ -18,6 +23,7 @@ class ExternalModels:
 
     This provides a single deterministic update point for:
 
+        - Site load
         - Power flow (site import/export)
         - Grid frequency
         - Grid voltage
@@ -37,12 +43,14 @@ class ExternalModels:
         grid_voltage_model: Optional[GridVoltageModel] = None,
         ambient_temperature_model: Optional[AmbientTemperatureModel]=None,
         irradiance_model: Optional[IrradianceModelBase]=None,
+        load_model: Optional[SiteLoadModel]=None,
     ):
         self.power_model = power_model
         self.grid_frequency_model = grid_frequency_model
         self.grid_voltage_model = grid_voltage_model
         self.ambient_temperature_model = ambient_temperature_model
         self.irradiance_model = irradiance_model
+        self.load_model = load_model
 
     # ---------------------------------------------------------
     # STEP ALL EXTERNAL MODELS
@@ -59,7 +67,14 @@ class ExternalModels:
         event-scheduled grid models the latter.
         """
 
-        # Power balance must run first so meter sees correct values
+        # Load first: the power balance reads it through base_load_supplier,
+        # and advancing it here keeps its daily profile in phase with the
+        # irradiance and temperature models rather than with the power model's
+        # own private clock.
+        if self.load_model:
+            self.load_model.advance(sim_time, dt)
+
+        # Power balance must run before the meter sees it
         if self.power_model:
             self.power_model.update(dt)
 
@@ -78,19 +93,27 @@ class ExternalModels:
             self.irradiance_model.advance(utc_time, sim_time, dt)
 
     @staticmethod
-    def build_power_model(devices_by_type, config=None):
-        base_load = 5.0  # default 5 kW
-        if config:
-            cfg_base_load = config.get("power", {}).get("base_load_w")
-            if cfg_base_load is not None:
-                base_load = float(cfg_base_load) / 1000.0  # W -> kW
+    def build_power_model(devices_by_type, config=None, load_model=None):
+        # Pass the load model that update() actually advances. Without one,
+        # fall back to a genuine constant rather than a profiled model frozen
+        # at its initial value.
+        if load_model is None:
+            legacy_w = (config or {}).get("power", {}).get("base_load_w")
+            load_model = SiteLoadModel(
+                base_kw=float(legacy_w) / 1000.0
+                if legacy_w is not None
+                else DEFAULT_BASE_KW
+            )
 
         bess_devices = devices_by_type.get("bess", [])
         pv_devices = devices_by_type.get("inverter", [])
         chp_devices = devices_by_type.get("chp", [])
 
         return SitePowerModel(
-            base_load_supplier=lambda t: base_load,
+            # The supplier ignores t: the load model is advanced by
+            # update() against the engine clock, so this just reads the
+            # current value.
+            base_load_supplier=lambda t: load_model.get_power_kw(),
             pv_supplier=lambda: sum(
                 p.get_telemetry().total_active_power
                 for p in pv_devices
@@ -112,6 +135,7 @@ class ExternalModels:
             grid_voltage_model=ConstantGridVoltageModel(),
             ambient_temperature_model=None,
             irradiance_model=None,
+            load_model=build_load_model(None),
         )
 
     @classmethod
@@ -152,4 +176,6 @@ class ExternalModels:
                 amplitude_c=temp_cfg.get("amplitude", 5.0),
                 peak_hour=temp_cfg.get("peak_hour", 15.0),
             ),
+
+            load_model=build_load_model(config, data_root=data_root),
         )

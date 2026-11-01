@@ -144,6 +144,7 @@ Key properties:
 - Stochastic cloud cover with persistent day-to-day weather regimes, seedable and reproducible
 - Plane-of-array irradiance for tilted, oriented PV arrays, with DC/AC ratio and inverter clipping
 - Irradiance from a CSV, for replaying measured data
+- Stochastic site load — daily profile, weekday/weekend factor, slow mean-reverting drift and fast noise, all seedable
 - Ambient temperature, grid frequency, and grid voltage models
 - Multi-device support across independent ports
 - External model events (voltage sags, frequency deviations)
@@ -225,6 +226,7 @@ Sites are defined in JSON. Each asset declares its type, parameters, and protoco
 **`data_root`** — path for CSV inputs (`irradiance.series_csv`), resolved relative to the config file. Defaults to the working directory.
 **`register_map_root`** — path to register map directory, resolved relative to the working directory where you run `dertwin`
 **`state_root`** — path for device state files (`state_file` on a BESS asset), resolved relative to the config file. Defaults to the working directory.
+**`data_root`** — path for CSV inputs (`load.profile.csv`, irradiance series), resolved relative to the config file. Defaults to the working directory.
 **`ip: "0.0.0.0"`** — required when running inside Docker so port mapping works. Use `127.0.0.1` for local-only.
 
 Unknown asset keys are rejected at build time with a "did you mean" hint, so a typo fails loudly instead of being silently ignored.
@@ -358,6 +360,62 @@ already in-plane — the pre-0.2 behaviour. `dc_capacity_kw` (or `dc_ac_ratio`)
 oversizes the array relative to `ac_rating_kw` so the inverter actually clips,
 as real plants do; leave both out and DC/AC stays 1.0 and nothing ever clips.
 See [`dertwin/devices/pv/README.md`](dertwin/devices/pv/README.md).
+### Site load
+
+The site load is multiplicative, so each piece can be configured without
+fighting the others:
+
+```
+load_kw = base_kw × profile(hour) × weekday × drift × (1 + noise)
+```
+
+```json
+{
+  "external_models": {
+    "load": {
+      "base_kw": 50.0,
+      "profile": {
+        "model": "hourly",
+        "hourly": [0.55, 0.52, 0.50, 0.50, 0.52, 0.60, 0.75, 0.95,
+                   1.05, 1.05, 1.00, 0.98, 0.95, 0.95, 0.98, 1.05,
+                   1.20, 1.35, 1.30, 1.15, 1.00, 0.85, 0.70, 0.60],
+        "interpolate": true,
+        "normalize": true
+      },
+      "weekday_factor": 1.0,
+      "weekend_factor": 0.75,
+      "start_weekday": "monday",
+      "drift": { "sigma": 0.12, "tau_s": 10800.0, "min_factor": 0.7, "max_factor": 1.3 },
+      "noise": { "sigma": 0.02, "tau_s": 30.0 },
+      "min_kw": 0.0,
+      "max_kw": null,
+      "seed": 7
+    }
+  }
+}
+```
+
+**`base_kw`** — the *average* load. The profile is normalised to a daily mean of
+1.0, so changing the shape never moves the average.
+**`profile.model`** — `flat` (default, the pre-0.2 constant), `hourly` (24
+factors), `parametric` (a night baseline with morning and evening bumps), or
+`csv` (an hour-of-day table at any resolution; a `kw` column sets `base_kw`
+from its mean).
+Hourly factors sit at their **hour centres** and interpolate circularly, so
+there is no discontinuity at midnight.
+**`weekend_factor`** — applied on Saturday and Sunday. The clock is an offset
+from the start of the run rather than a date, so `start_weekday` places the week
+and it advances at each simulated midnight.
+**`drift`** — slow mean-reverting random walk, the "this week is busier than
+usual" term. `sigma` is the standard deviation of the multiplicative factor and
+`tau_s` its correlation time; bounded by `min_factor` / `max_factor`.
+**`noise`** — the same process on a timescale of seconds.
+**`seed`** — one seed drives both random terms. Drift and noise are off unless
+configured.
+
+The legacy `external_models.power.base_load_w` still works and is still a flat
+load; a `load` block supersedes it, and a `load` block with no `base_kw`
+inherits its value.
 ### Migrating from 0.1.x
 
 Every existing config key still works and no config in `configs/` needed
@@ -560,7 +618,7 @@ docker run \
 pytest
 ```
 
-The test suite covers device physics (BESS, PV, CHP, energy meter), solar geometry and clear-sky irradiance against published reference values, cloud-model statistics, register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
+The test suite covers device physics (BESS, PV, CHP, energy meter), solar geometry and clear-sky irradiance against published reference values, cloud-model statistics, the statistics of the stochastic site load, register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
 
 The built-in solar model is also cross-checked against `pvlib`, which is
 optional, so that suite skips unless you install it:
