@@ -22,20 +22,17 @@ def load_config(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    # register_map_root resolves relative to cwd, not config file
-    if "register_map_root" in config:
-        register_map_root = Path(config["register_map_root"])
-        if not register_map_root.is_absolute():
-            register_map_root = path.parent / register_map_root
-        config["register_map_root"] = str(register_map_root.resolve())
+    # Path roots resolve relative to the config file, not the working
+    # directory, so a config is portable: register maps, BESS state files and
+    # CSV inputs all live next to the config that declared them.
+    for key in ("register_map_root", "state_root", "data_root"):
+        if key not in config:
+            continue
 
-    # state_root follows the same rule, so BESS state files live next to the
-    # config that declared them rather than wherever dertwin was launched.
-    if "state_root" in config:
-        state_root = Path(config["state_root"])
-        if not state_root.is_absolute():
-            state_root = path.parent / state_root
-        config["state_root"] = str(state_root.resolve())
+        root = Path(config[key])
+        if not root.is_absolute():
+            root = path.parent / root
+        config[key] = str(root.resolve())
 
     return config
 

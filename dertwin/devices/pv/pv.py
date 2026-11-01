@@ -34,6 +34,10 @@ class PVModel:
 
         return self.get_telemetry()
 
+    def reset_today_energy(self):
+        """Called at the UTC day boundary, so today_output_energy means today."""
+        self.today_energy_kwh = 0.0
+
     def get_telemetry(self):
         return PVTelemetry(
             inverter_status=1 if self.inverter.active_power_w > 10 else 0,

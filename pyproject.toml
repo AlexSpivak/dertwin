@@ -41,6 +41,12 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
 ]
+# The built-in clear-sky model is standard library only. This extra swaps in
+# pvlib for anyone who wants reference-grade irradiance, and lets the test
+# suite check the built-in model against it.
+pvlib = [
+    "pvlib>=0.11",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

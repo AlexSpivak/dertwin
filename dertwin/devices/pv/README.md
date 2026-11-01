@@ -7,20 +7,43 @@ It is structured in layered components to separate generation physics, inverter 
 ## Files Overview
 ### panel.py
 
-**DC-side photovoltaic generation model**
+**DC-side photovoltaic array model**
 
-Responsible for deterministic solar power behavior:
-- Irradiance-to-power conversion
-- Rated power limiting
-- Temperature derating
-- DC-side clipping
-- Deterministic power curve
+Responsible for:
+- In-plane irradiance, including plane-of-array transposition for a tilted,
+  oriented array
+- Irradiance-based DC production
+- Cell temperature (NOCT approximation) and temperature derating
+- System loss derate
 
-The PV array model:
-- Does not handle AC ramping
-- Does not manage grid interaction
-- Does not expose protocols
-- Only converts environmental input into available DC power
+#### DC sizing
+
+Two paths, because the capacity form is what people actually have on a
+datasheet and the area form is what the model shipped with:
+
+| Input | Formula |
+|---|---|
+| `dc_capacity_kw` | `dc_capacity_kw · (POA / 1000) · temp_factor · derate` |
+| `area_m2`, `module_efficiency` | `POA · area_m2 · module_efficiency · temp_factor · derate` |
+
+They are the same nameplate when `dc_capacity_kw == area_m2 · module_efficiency`,
+so the two agree exactly for an equivalent array.
+
+#### Tilt and azimuth
+
+Transposition happens only when `tilt_deg` is set **and** the irradiance source
+knows where the sun is. Otherwise the incoming value is taken as already
+in-plane — which is what the legacy sinusoidal irradiance model implies, and
+what the model did before tilt existed. Configuring `tilt_deg` against
+`irradiance.model: "sinusoidal"` logs one warning and falls back.
+
+`azimuth_deg` is degrees clockwise from true north: 180 is due south. With
+`tilt_deg` set and no azimuth, the array faces the equator; with an azimuth and
+no tilt, it adopts a latitude tilt (capped at 60°).
+
+At 59 N a 45° south-facing array collects over 30% more than a horizontal one
+on a clear late-October day, which is exactly why steep tilts are used at high
+latitudes — and why a model without tilt understates a northern winter.
 
 ### inverter.py
 
@@ -59,6 +82,10 @@ This ensures:
 
 `PVModel` represents the full photovoltaic plant abstraction.
 
+`today_energy_kwh` is zeroed at the UTC day boundary, which the PV simulator
+detects from the instant the irradiance model was last advanced to — so
+`today_output_energy` means today, not "since the process started".
+
 ### controller.py
 
 **Device-level command and telemetry bridge**
@@ -89,6 +116,23 @@ Provides:
 - Exposing Modbus-accessible values
 
 This is the entry point used by site-level simulations.
+
+#### DC/AC sizing precedence
+
+Highest first:
+
+1. `dc_capacity_kw` — explicit STC DC nameplate
+2. `area_m2 × module_efficiency` — the original formulation
+3. `ac_rating_kw × dc_ac_ratio`
+4. `ac_rating_kw` — DC/AC = 1.0
+
+`rated_kw` is the AC rating and still works as the only sizing input, in which
+case DC/AC stays 1.0 and the array can never reach its own rating, let alone
+clip. Real plants run 1.15–1.35 and clip for hours in summer, so set
+`dc_ac_ratio` or `dc_capacity_kw` for anything realistic.
+
+Losses: `losses` is an itemised map whose values multiply out, and it wins over
+a single `derate`.
 
 ## Architectural Principles
 

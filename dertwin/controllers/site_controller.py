@@ -70,10 +70,16 @@ class SiteController:
         self.config = config
         self.register_map_root = Path(config.get("register_map_root", "."))
         self.state_root = Path(config.get("state_root", "."))
+        self.data_root = Path(config.get("data_root", "."))
+
+        # Absolute UTC anchor. Without it the clock sits at the Unix epoch, so
+        # start_time_h keeps meaning "hours past midnight" as it always has.
+        self._sim_start_utc_configured = config.get("sim_start_utc") is not None
 
         self.clock = SimulationClock(
             step=config.get("step", 0.1),
             real_time=config.get("real_time", True),
+            start_utc=config.get("sim_start_utc"),
         )
 
         self.engine: Optional[SimulationEngine] = None
@@ -114,7 +120,9 @@ class SiteController:
 
         if self.config.get("external_models"):
             self.external_models = ExternalModels.from_config(
-                self.config["external_models"]
+                self.config["external_models"],
+                data_root=self.data_root,
+                sim_start_utc_configured=self._sim_start_utc_configured,
             )
         else:
             self.external_models = ExternalModels.build_default()
@@ -538,6 +546,16 @@ class SiteController:
                 rated_kw=spec.get("rated_kw", 10.0),
                 module_efficiency=spec.get("module_efficiency", 0.20),
                 area_m2=spec.get("area_m2"),
+                ac_rating_kw=spec.get("ac_rating_kw"),
+                dc_capacity_kw=spec.get("dc_capacity_kw"),
+                dc_ac_ratio=spec.get("dc_ac_ratio"),
+                tilt_deg=spec.get("tilt_deg"),
+                azimuth_deg=spec.get("azimuth_deg"),
+                albedo=spec.get("albedo", 0.2),
+                derate=spec.get("derate"),
+                losses=spec.get("losses"),
+                temp_coefficient=spec.get("temp_coefficient", -0.004),
+                noct_c=spec.get("noct_c", 45.0),
                 ambient_temp_model=self.external_models.ambient_temperature_model,
                 grid_voltage_model=self.external_models.grid_voltage_model,
                 grid_frequency_model=self.external_models.grid_frequency_model,
