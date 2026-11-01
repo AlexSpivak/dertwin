@@ -11,9 +11,12 @@ All models are designed to be **deterministic**, fully **simulation-time driven*
 - [Features](#features)
 - [Modules](#modules)
   - [ambient_temperature.py](#ambient_temperaturepy)
+  - [solar.py](#solarpy)
+  - [clouds.py](#cloudspy)
   - [irradiance.py](#irradiancepy)
   - [load.py](#loadpy)
   - [stochastic.py](#stochasticpy)
+  - [timeseries.py](#timeseriespy)
   - [grid_frequency.py](#grid_frequencypy)
   - [grid_voltage.py](#grid_voltagepy)
   - [power_flow.py](#power_flowpy)
@@ -25,7 +28,7 @@ All models are designed to be **deterministic**, fully **simulation-time driven*
 ## Features
 
 - **Ambient conditions:** Deterministic daily temperature profiles
-- **Solar irradiance:** Clear-sky sinusoidal irradiance curves
+- **Solar irradiance:** Real solar geometry for a date and location — correct sunrise, sunset and seasonal peak — with a stochastic cloud model on top, or the original fixed-shape sinusoidal curve, or GHI replayed from a CSV
 - **Grid frequency & voltage:** Drift, noise, events, and deterministic disturbances
 - **Site load:** Daily profile, weekday/weekend factor, slow mean-reverting drift and fast noise — seedable
 - **Site power flow:** Aggregates load, PV, BESS, and CHP contributions
@@ -59,21 +62,110 @@ atm.update(sim_time=36000, dt=60)
 temperature = atm.get_temperature()
 ```
 
+### `solar.py`
+
+Solar geometry and clear-sky irradiance. Standard library only — no numpy, no
+pandas, no pvlib.
+
+**Pipeline:**
+
+```
+solar_position(utc_time, lat, lon)          NOAA / Spencer (1971)
+  -> clear_sky_ghi(position, utc_time)      Ineichen-Perez (2002), or Haurwitz (1945)
+  -> erbs_split(ghi, position, utc_time)    Erbs (1982): GHI -> DNI + DHI
+  -> plane_of_array_irradiance(...)         Liu & Jordan (1963) isotropic sky
+```
+
+Each step is a plain function on floats, so it is testable in isolation and
+costs nothing per tick.
+
+**Measured accuracy** against pvlib's SPA over all of 2025 at 59.3 N, 30-minute
+resolution (`tests/devices/external/test_pvlib_agreement.py`):
+
+| Quantity | Error |
+|---|---|
+| Solar declination | ≤ 0.54° — *identical* to pvlib's own `declination_spencer71`; the residual is inherent to the Spencer-71 series |
+| Solar elevation | ≤ 0.55° |
+| Solar azimuth | ≤ 0.44° |
+| Equation of time | ≤ 0.02 min |
+| Annual clear-sky GHI, cost of the position error | 0.03 % |
+| Annual clear-sky GHI, this Ineichen vs pvlib's | 1.4 % |
+
+Refraction is not modelled, so elevation is geometric: worth up to half a
+degree at the horizon and almost no energy.
+
+Two notes on Ineichen-Perez. The `exp(0.01·AM^1.8)` Perez enhancement from the
+original paper is **on** by default here, where pvlib leaves it off: without it
+the model reads ~30% low at a high-latitude winter sun (62 vs 87 W/m² at
+Stockholm in December, against Haurwitz). It does misbehave within a degree of
+the horizon, so GHI is clamped to the extraterrestrial horizontal irradiance —
+a hard physical ceiling.
+
+### `clouds.py`
+
+**Classes:** `AR1CloudModel`, `ClearSkyCloudModel`, `SeriesCloudModel`
+
+Cloud cover as a clear-sky index `kt` in `[kt_min, 1]`, the fraction of
+clear-sky GHI that reaches the ground. Two timescales, because real weather has
+both:
+
+```
+z  <- phi·z + sqrt(1 - phi²)·sigma_day·N(0,1)     once per UTC day   (AR(1))
+kt_day = kt_min + (1 - kt_min)·expit(logit(m) + z)
+x  <- a·x + sqrt(1 - a²)·intraday_sigma·N(0,1)    every step, a = exp(-dt/tau)  (OU)
+kt = clamp(kt_day + x, kt_min, 1)
+```
+
+The daily index is drawn in logit space, which keeps it bounded without
+clipping artefacts, and `phi` alone controls how long overcast spells last.
+Both processes start in their stationary distribution, so there is no warm-up
+transient. By symmetry the **median** daily index is exactly `mean_kt`.
+
+`sigma_day` is in logit space. The default `0.9` gives a daily index with a
+standard deviation of about 0.17 and genuinely overcast days a few percent of
+the time; `0.45` would keep every day between 0.45 and 0.77, which is no
+climate on earth.
+
+Clouds are **on by default** when a clear-sky model is configured. Set
+`cloud.seed` for reproducible runs, or `cloud.enabled: false` for a permanently
+cloudless sky.
+
+`model: "markov"` (a 3-state regime chain) is reserved and currently raises
+`NotImplementedError`.
+
 ### `irradiance.py`
 
-**Class:** `IrradianceModel`
-Simulates daily clear-sky irradiance.
+**Classes:** `IrradianceModel`, `ClearSkyIrradianceModel`,
+`SeriesIrradianceModel`; factory `build_irradiance_model`
 
-**Features:**
-- Sinusoidal daily irradiance curve
-- Configurable peak irradiance, sunrise, and sunset hours
-- Deterministic 24h cycle
+Three models, selected by `irradiance.model`:
+
+| `model` | Behaviour |
+|---|---|
+| `"sinusoidal"` | The original fixed-shape day: a sine between a configured sunrise and sunset, identical every day of the year everywhere on earth. **The default**, so existing configs are untouched. |
+| `"clearsky"` | Real solar geometry for the date and location × a cloud index. Selected automatically when `latitude` is given. |
+| `"series"` | GHI replayed from a CSV. |
+
+All three publish `IrradianceComponents` — GHI, DNI, DHI and the sun's
+position. Plane-of-array transposition is deliberately **not** done here: one
+irradiance model is shared by every PV asset on the site and each array has its
+own tilt and azimuth, so transposition belongs to the array (see
+`dertwin/devices/pv/README.md`).
+
+`IrradianceModel` keeps its original `update(sim_time, dt)` signature and has
+no solar geometry, so `IrradianceComponents.has_solar_geometry` is `False` and a
+tilted array falls back to treating irradiance as already in-plane, with one
+warning.
+
+A `clearsky` or `series` model needs a date, so it requires a top-level
+`sim_start_utc` and raises without one — otherwise it would silently simulate
+January 1970.
 
 **Key methods:**
 ```python
-update(sim_time: float, dt: float)
-get_irradiance() -> float
-set_irradiance(value: float)
+advance(utc_time: datetime, sim_time: float, dt: float)
+get_components() -> IrradianceComponents
+get_irradiance() -> float          # GHI, W/m²
 ```
 
 ### `load.py`
@@ -161,6 +253,14 @@ orders of magnitude of `dt`.
 The process starts drawn from its stationary distribution, so there is no
 warm-up transient, and a disabled process (`sigma = 0`) draws nothing from the
 random stream — so enabling it cannot shift an unrelated process's path.
+### `timeseries.py`
+
+**Class:** `TimeSeries`
+
+CSV time series for driving an external model from recorded data. Linear or
+step interpolation, timestamps parsed as ISO 8601 (bare, `Z`, or an offset),
+rows may be unsorted. `value_at` returns `None` outside the covered range —
+one warning, then each caller decides what that means (zero for irradiance).
 
 ### `grid_frequency.py`
 
@@ -267,18 +367,22 @@ world → devices → telemetry
 
 **Key methods:**
 ```python
-update(sim_time: float, dt: float)
+update(utc_time: datetime, sim_time: float, dt: float)
 build_power_model(devices_by_type, config=None, load_model=None)
 build_default()
-from_config(config: Dict, data_root=None)
+from_config(config: Dict, data_root=None, sim_start_utc_configured=False)
 ```
 
-`update` advances the load **before** the power balance, because the balance
-reads the load through `base_load_supplier`. Advancing it here, against the
-engine's own simulation time, is also what keeps the load's daily profile in
-phase with the irradiance and ambient temperature models — `SitePowerModel`
-keeps a private clock that starts at zero and ignores `start_time_h`, so a
-supplier keyed off that argument would have sat hours out of phase.
+`update` takes both clocks: `utc_time` is the absolute instant, used by the
+date-aware irradiance model, and `sim_time` is seconds since the start of the
+run, used by the event schedules in the grid frequency and voltage models.
+
+It advances the load **before** the power balance, because the balance reads
+the load through `base_load_supplier`. Advancing it here, against the engine's
+own simulation time, is also what keeps the load's daily profile in phase with
+the irradiance and ambient temperature models — `SitePowerModel` keeps a
+private clock that starts at zero and ignores `start_time_h`, so a supplier
+keyed off that argument would have sat hours out of phase.
 
 `build_power_model` automatically wires up `pv_supplier`, `bess_supplier`, and `chp_supplier` based on the device types present in the site, summing `total_active_power` from PV, `active_power` from BESS, and `actual_power_kw` from CHP.
 
@@ -287,28 +391,52 @@ supplier keyed off that argument would have sat hours out of phase.
 from dertwin.devices.external.external_models import ExternalModels
 
 external = ExternalModels.build_default()
-external.update(sim_time=3600, dt=60)
+external.update(utc_time=datetime(2025, 10, 31, 1, tzinfo=timezone.utc),
+                sim_time=3600, dt=60)
 ```
 
 ## Usage Example
 ```python
+from datetime import datetime, timedelta, timezone
+
 from dertwin.devices.external.ambient_temperature import AmbientTemperatureModel
+from dertwin.devices.external.clouds import AR1CloudModel
 from dertwin.devices.external.external_models import ExternalModels
+from dertwin.devices.external.irradiance import ClearSkyIrradianceModel
 
-# Create ambient temperature model
-atm = AmbientTemperatureModel(mean_temp_c=22, amplitude_c=5, peak_hour=15)
+# Stockholm, late October
+irradiance = ClearSkyIrradianceModel(
+    latitude=59.3293,
+    longitude=18.0686,
+    altitude_m=44.0,
+    linke_turbidity=3.0,
+    cloud_model=AR1CloudModel(mean_kt=0.48, seed=59),
+)
+atm = AmbientTemperatureModel(mean_temp_c=8, amplitude_c=4, peak_hour=15)
 
-# Aggregate into external models
-external = ExternalModels(ambient_temperature_model=atm)
+external = ExternalModels(
+    ambient_temperature_model=atm,
+    irradiance_model=irradiance,
+)
 
-# Simulate
-for t in range(0, 86400, 60):  # 1 day, 1-minute steps
-    external.update(sim_time=t, dt=60)
-    print(f"Time {t/3600:.1f}h: Temp={atm.get_temperature():.2f} C")
+start = datetime(2025, 10, 31, tzinfo=timezone.utc)
+
+for t in range(0, 86400, 600):  # 1 day, 10-minute steps
+    external.update(start + timedelta(seconds=t), sim_time=t, dt=600)
+    components = irradiance.get_components()
+    print(
+        f"{(start + timedelta(seconds=t)):%H:%M}  "
+        f"elev={components.position.elevation_deg:6.2f} deg  "
+        f"GHI={components.ghi:6.1f} W/m2  "
+        f"kt={components.clear_sky_index:.2f}  "
+        f"T={atm.get_temperature():.1f} C"
+    )
 ```
 
 ## Deterministic Simulation Notes
-- All models are simulation-time driven.
+- All models are simulation-time driven; internal time is always UTC.
+- Stochastic models are seedable: set `cloud.seed`, `grid_frequency.seed` and
+  `grid_voltage.seed` for a reproducible run.
 - The update sequence guarantees world → devices → telemetry.
 - Supports both constant and stochastic/deterministic variations.
 - Provides configurable defaults for quick prototyping.

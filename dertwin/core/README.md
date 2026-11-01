@@ -40,6 +40,7 @@ Controls simulation time progression.
 
 - Fixed simulation step (e.g. 100ms)
 - Optional real-time mode
+- Absolute UTC anchor, so date-aware models know what day it is
 - Deterministic progression
 - Async-compatible
 
@@ -49,21 +50,35 @@ Controls simulation time progression.
 |-----------|------|------------|
 | `step` | float | Simulation timestep in seconds |
 | `real_time` | bool | If True, wall-clock synchronized |
+| `start_utc` | datetime \| str \| None | Absolute UTC instant time zero maps to. ISO 8601 accepted (bare, `Z`, or an offset). Defaults to the Unix epoch. |
 
 ### Behavior
 
 - In real-time mode: waits to match wall time
 - In deterministic mode: advances instantly
-- `time` always represents simulation time
+- `time` always represents simulation time, in seconds from the start
+- `now_utc()` is the absolute instant: `start_utc + time`
+
+Simulation time is **UTC throughout**. Defaulting `start_utc` to the Unix epoch
+is what keeps `start_time_h` meaning "hours past midnight" for configs written
+before absolute time existed.
 
 ### Example
 
 ```python
-clock = SimulationClock(step=0.1, real_time=True)
+from datetime import datetime, timezone
+
+clock = SimulationClock(
+    step=0.1, real_time=True, start_utc="2025-10-31T00:00:00Z"
+)
 
 await clock.tick()
-print(clock.time)
+print(clock.time)      # 0.1
+print(clock.now_utc())  # 2025-10-31 00:00:00.100000+00:00
 ```
+
+`parse_utc(value)` is the shared ISO 8601 parser; a value with no zone is taken
+as UTC.
 
 ## device.py
 
@@ -93,8 +108,8 @@ The deterministic simulation orchestrator.
 
 ### Execution Order Per Tick
 ```markdown
-1. external_models.update()
-2. device_controller.step()
+1. external_models.update(utc_time, sim_time, dt)
+2. device_controller.step(dt)
 3. clock.tick()
 ```
 This guarantees that:

@@ -214,7 +214,7 @@ Unknown `kind` values raise `ValueError`.
 | `type` | Class | Key Parameters |
 |---|---|---|
 | `bess` | `BESSSimulator` | `capacity_kwh`, `initial_soc`, `max_charge_kw`, `max_discharge_kw`, `ramp_rate_kw_per_s` |
-| `inverter` | `PVSimulator` | `rated_kw`, `module_efficiency`, `area_m2` |
+| `inverter` | `PVSimulator` | `rated_kw` / `ac_rating_kw`, `dc_capacity_kw`, `dc_ac_ratio`, `tilt_deg`, `azimuth_deg`, `derate` / `losses`, `module_efficiency`, `area_m2` |
 | `chp` | `CHPSimulator` | `rated_kw`, `heat_to_power_ratio`, `min_load_percent`, `max_load_percent` |
 | `energy_meter` | `EnergyMeterSimulator` | (no parameters — observes external models) |
 
@@ -331,7 +331,7 @@ await site.stop()
 
 Execution order per tick:
 ```
-external_models.update() → DeviceController.step() → clock.tick()
+external_models.update(utc_time, sim_time, dt) → DeviceController.step(dt) → clock.tick()
 ```
 
 Telemetry flows from devices → controllers → protocols (TCP, RTU, or both).

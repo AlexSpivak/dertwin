@@ -32,7 +32,7 @@ def test_bess_discharge_reduces_soc_correctly():
     bess.set_power_command(10)
     result: BESSTelemetry = bess.step(3600)
 
-    expected_energy = 10 * bess.battery.discharge_eff
+    expected_energy = 10 / bess.battery.discharge_eff
     expected_soc = 50 - (expected_energy / bess.battery.capacity_kwh) * 100
 
     assert pytest.approx(result.system_soc, rel=1e-6) == expected_soc
@@ -209,7 +209,7 @@ def test_power_factor_valid_range():
 
 def test_soc_derating_propagates_to_active_power():
     """
-    When SOC is in derating zone, actual active_power must be
+    When SOC is in the legacy derating zone, actual active_power must be
     less than the requested command — the limit must propagate
     end-to-end from battery through inverter to telemetry.
     """
@@ -221,6 +221,7 @@ def test_soc_derating_propagates_to_active_power():
         initial_soc=22.5,
         limits=limits,
         max_discharge_kw=10,
+        limit_mode="taper",
     )
     inverter = InverterModel(10, 10, 1000)
     bess = BESSModel(battery, inverter)
