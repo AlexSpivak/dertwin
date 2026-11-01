@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
@@ -15,6 +16,8 @@ from dertwin.devices.external.load import (
 from dertwin.devices.external.power_flow import SitePowerModel
 from dertwin.devices.external.grid_frequency import GridFrequencyModel, ConstantGridFrequencyModel
 from dertwin.devices.external.grid_voltage import GridVoltageModel, ConstantGridVoltageModel
+
+logger = logging.getLogger(__name__)
 
 
 class ExternalModels:
@@ -44,6 +47,7 @@ class ExternalModels:
         ambient_temperature_model: Optional[AmbientTemperatureModel]=None,
         irradiance_model: Optional[IrradianceModelBase]=None,
         load_model: Optional[SiteLoadModel]=None,
+        has_real_calendar: bool = False,
     ):
         self.power_model = power_model
         self.grid_frequency_model = grid_frequency_model
@@ -51,6 +55,12 @@ class ExternalModels:
         self.ambient_temperature_model = ambient_temperature_model
         self.irradiance_model = irradiance_model
         self.load_model = load_model
+
+        # True only when the config actually named a date. The clock otherwise
+        # sits on the Unix epoch, which is a Thursday — an implementation
+        # artefact, not a date anyone chose, so it must not override the
+        # load's start_weekday.
+        self.has_real_calendar = has_real_calendar
 
     # ---------------------------------------------------------
     # STEP ALL EXTERNAL MODELS
@@ -63,16 +73,22 @@ class ExternalModels:
         Called once per simulation tick BEFORE devices update.
 
         `utc_time` is the absolute instant; `sim_time` is seconds since the
-        start of the run. Date-aware models (irradiance) use the former, the
-        event-scheduled grid models the latter.
+        start of the run. Date-aware models (irradiance, and the load's
+        weekday factor) use the former, the event-scheduled grid models the
+        latter.
         """
 
         # Load first: the power balance reads it through base_load_supplier,
         # and advancing it here keeps its daily profile in phase with the
         # irradiance and temperature models rather than with the power model's
-        # own private clock.
+        # own private clock. The absolute instant is handed over only when
+        # the config named a real date, in which case the calendar drives the
+        # weekday factor instead of start_weekday.
         if self.load_model:
-            self.load_model.advance(sim_time, dt)
+            self.load_model.advance(
+                sim_time, dt,
+                utc_time=utc_time if self.has_real_calendar else None,
+            )
 
         # Power balance must run before the meter sees it
         if self.power_model:
@@ -150,6 +166,16 @@ class ExternalModels:
         irr_cfg = config.get("irradiance", {})
         temp_cfg = config.get("ambient_temperature", {})
 
+        load_model = build_load_model(config, data_root=data_root)
+
+        if sim_start_utc_configured and (config.get("load") or {}).get(
+            "start_weekday"
+        ) is not None:
+            logger.info(
+                "Both sim_start_utc and load.start_weekday are configured; "
+                "the calendar date wins and start_weekday is ignored."
+            )
+
         return cls(
             grid_frequency_model=GridFrequencyModel(
                 nominal_hz=freq_cfg.get("nominal_hz", 50.0),
@@ -177,5 +203,6 @@ class ExternalModels:
                 peak_hour=temp_cfg.get("peak_hour", 15.0),
             ),
 
-            load_model=build_load_model(config, data_root=data_root),
+            load_model=load_model,
+            has_real_calendar=sim_start_utc_configured,
         )
