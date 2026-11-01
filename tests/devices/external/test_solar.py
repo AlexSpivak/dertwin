@@ -366,3 +366,122 @@ def test_default_orientation_follows_the_hemisphere():
     assert solar.default_tilt_deg(75.0) == 60.0
     assert solar.default_azimuth_deg(STOCKHOLM_LAT) == 180.0
     assert solar.default_azimuth_deg(-33.9) == 0.0
+
+
+# ------------------------------------------------------------
+# Beam ceiling
+# ------------------------------------------------------------
+
+def test_ineichen_dni_falls_away_at_extreme_airmass():
+    moment, position = find_solar_noon(utc(2025, 6, 21), STOCKHOLM_LAT, STOCKHOLM_LON)
+    summer_noon = solar.ineichen_dni(
+        position, moment, altitude_m=STOCKHOLM_ALT_M, linke_turbidity=2.5
+    )
+
+    low_sun = solar.solar_position(
+        datetime(2025, 12, 21, 13, 11, tzinfo=timezone.utc),
+        STOCKHOLM_LAT, STOCKHOLM_LON,
+    )
+    winter_grazing = solar.ineichen_dni(
+        low_sun, utc(2025, 12, 21), altitude_m=STOCKHOLM_ALT_M, linke_turbidity=2.5
+    )
+
+    assert 800.0 < summer_noon < 1000.0
+    assert 0.0 < winter_grazing < 100.0
+    assert winter_grazing < summer_noon * 0.1
+
+
+def test_beam_ceiling_caps_the_erbs_split_at_low_sun():
+    """
+    Erbs infers DNI by dividing by cos(zenith), which blows up near the
+    horizon: two degrees up in a Nordic December it reports a beam of
+    ~1180 W/m², through some twenty-five airmasses.
+    """
+    moment = datetime(2025, 12, 21, 13, 11, tzinfo=timezone.utc)
+    position = solar.solar_position(moment, STOCKHOLM_LAT, STOCKHOLM_LON)
+
+    ghi = solar.ineichen_ghi(
+        position, moment, altitude_m=STOCKHOLM_ALT_M, linke_turbidity=2.5
+    )
+    dni, dhi = solar.erbs_split(ghi, position, moment)
+
+    raw = solar.IrradianceComponents(
+        ghi=ghi, dni=dni, dhi=dhi, position=position,
+        clear_sky_ghi=ghi, clear_sky_index=1.0,
+    )
+    capped = solar.limit_beam_to_clear_sky(
+        raw, moment, altitude_m=STOCKHOLM_ALT_M, linke_turbidity=2.5
+    )
+
+    assert dni > 1000.0                       # the problem
+    assert capped.dni < dni * 0.1             # the fix
+    assert capped.ghi == pytest.approx(ghi)   # GHI is preserved exactly
+    assert capped.dhi > raw.dhi               # the excess arrives as diffuse
+
+
+def test_beam_ceiling_preserves_ghi_whenever_it_bites():
+    start = datetime(2025, 12, 21, tzinfo=timezone.utc)
+
+    for minute in range(0, 24 * 60, 5):
+        moment = start + timedelta(minutes=minute)
+        position = solar.solar_position(moment, STOCKHOLM_LAT, STOCKHOLM_LON)
+
+        if not position.is_up:
+            continue
+
+        ghi = solar.ineichen_ghi(position, moment, altitude_m=STOCKHOLM_ALT_M)
+        dni, dhi = solar.erbs_split(ghi, position, moment)
+        capped = solar.limit_beam_to_clear_sky(
+            solar.IrradianceComponents(
+                ghi=ghi, dni=dni, dhi=dhi, position=position,
+                clear_sky_ghi=ghi, clear_sky_index=1.0,
+            ),
+            moment, altitude_m=STOCKHOLM_ALT_M,
+        )
+
+        assert capped.dni * position.cos_zenith + capped.dhi == pytest.approx(
+            ghi, rel=1e-9
+        )
+        assert capped.dni <= dni + 1e-9
+        assert capped.dhi >= -1e-9
+
+
+def test_beam_ceiling_leaves_a_high_sun_alone():
+    moment, position = find_solar_noon(utc(2025, 6, 21), STOCKHOLM_LAT, STOCKHOLM_LON)
+
+    ghi = solar.ineichen_ghi(position, moment, altitude_m=STOCKHOLM_ALT_M)
+    dni, dhi = solar.erbs_split(ghi, position, moment)
+    raw = solar.IrradianceComponents(
+        ghi=ghi, dni=dni, dhi=dhi, position=position,
+        clear_sky_ghi=ghi, clear_sky_index=1.0,
+    )
+
+    assert solar.limit_beam_to_clear_sky(
+        raw, moment, altitude_m=STOCKHOLM_ALT_M
+    ) is raw
+
+
+def test_plane_of_array_never_exceeds_a_plausible_winter_beam():
+    """
+    The regression this exists for: a 45 degree array at 59 N in December used
+    to report a plane-of-array peak of 737 W/m² from a GHI of 108.
+    """
+    from dertwin.devices.external.irradiance import ClearSkyIrradianceModel
+
+    model = ClearSkyIrradianceModel(
+        latitude=STOCKHOLM_LAT, longitude=STOCKHOLM_LON,
+        altitude_m=STOCKHOLM_ALT_M, linke_turbidity=2.5,
+    )
+
+    start = datetime(2025, 12, 21, tzinfo=timezone.utc)
+    peak_poa = 0.0
+
+    for minute in range(0, 24 * 60):
+        moment = start + timedelta(minutes=minute)
+        model.advance(moment, minute * 60.0, 60.0)
+        peak_poa = max(
+            peak_poa,
+            solar.plane_of_array_irradiance(model.get_components(), 45.0, 180.0),
+        )
+
+    assert peak_poa < 450.0

@@ -1,0 +1,152 @@
+{
+  "site_name": "stockholm-autumn",
+  "comment": "Northern Europe example — 59.33 N. Config only: no site-specific code anywhere in dertwin/. Late October, when a Nordic site sees 8.7 h of daylight and a clear-sky GHI peak of about 274 W/m2.",
+
+  "step": 1.0,
+  "real_time": true,
+  "sim_start_utc": "2025-10-31T00:00:00Z",
+  "register_map_root": "register_maps",
+  "state_root": "../state",
+
+  "external_models": {
+    "irradiance": {
+      "comment": "Stockholm. timezone is a label for logs only — internal time is UTC. Linke turbidity 2.5 for a clear maritime autumn atmosphere.",
+      "latitude": 59.3293,
+      "longitude": 18.0686,
+      "timezone": "Europe/Stockholm",
+      "altitude_m": 44.0,
+      "clearsky_model": "ineichen",
+      "linke_turbidity": 2.5,
+      "cloud": {
+        "enabled": true,
+        "model": "ar1",
+        "mean_kt": 0.42,
+        "phi": 0.7,
+        "sigma_day": 0.9,
+        "kt_min": 0.08,
+        "intraday_sigma": 0.07,
+        "intraday_tau_s": 900.0,
+        "seed": 59
+      }
+    },
+
+    "ambient_temperature": {
+      "comment": "Stockholm end of October: around 7 C, swinging 4 K about mid-afternoon.",
+      "mean": 7.0,
+      "amplitude": 4.0,
+      "peak_hour": 14.0
+    },
+
+    "load": {
+      "comment": "45 kW average commercial site with a Nordic winter-evening peak — lights and heating come on while people are still in the building.",
+      "base_kw": 45.0,
+      "profile": {
+        "model": "hourly",
+        "hourly": [
+          0.58, 0.55, 0.53, 0.52, 0.54, 0.62,
+          0.80, 1.00, 1.12, 1.12, 1.08, 1.05,
+          1.02, 1.02, 1.05, 1.15, 1.32, 1.45,
+          1.38, 1.20, 1.00, 0.85, 0.70, 0.62
+        ],
+        "interpolate": true,
+        "normalize": true
+      },
+      "weekday_factor": 1.0,
+      "weekend_factor": 0.7,
+      "drift": {
+        "enabled": true,
+        "sigma": 0.1,
+        "tau_s": 10800.0,
+        "min_factor": 0.75,
+        "max_factor": 1.25
+      },
+      "noise": {
+        "enabled": true,
+        "sigma": 0.02,
+        "tau_s": 30.0
+      },
+      "min_kw": 0.0,
+      "seed": 59
+    },
+
+    "grid_frequency": {
+      "nominal_hz": 50.0,
+      "noise_std": 0.002,
+      "drift_std": 0.0002,
+      "seed": 59
+    },
+
+    "grid_voltage": {
+      "nominal_voltage_ll": 400.0,
+      "noise_std": 0.5,
+      "drift_std": 0.05,
+      "seed": 59
+    }
+  },
+
+  "assets": [
+    {
+      "comment": "40 kW DC on a 30 kW inverter (DC/AC 1.33) at a 45 degree south-facing tilt — steep, because at 59 N that is what catches a low autumn sun. Clips on clear summer days, never in late October.",
+      "type": "inverter",
+      "ac_rating_kw": 30.0,
+      "dc_capacity_kw": 40.0,
+      "tilt_deg": 45.0,
+      "azimuth_deg": 180.0,
+      "albedo": 0.2,
+      "losses": {
+        "soiling": 0.98,
+        "wiring": 0.98,
+        "mismatch": 0.98,
+        "availability": 0.99
+      },
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55101,
+          "unit_id": 1,
+          "register_map": "pv_inverter_modbus.yaml"
+        }
+      ]
+    },
+    {
+      "comment": "120 kWh battery in a hard 10-95% window. SOC survives a restart via state_file; delete it to cold-start at initial_soc.",
+      "type": "bess",
+      "asset_id": "stockholm-bess",
+      "capacity_kwh": 120.0,
+      "initial_soc": 55.0,
+      "soc_min_percent": 10.0,
+      "soc_max_percent": 95.0,
+      "limit_mode": "hard",
+      "max_charge_kw": 60.0,
+      "max_discharge_kw": 60.0,
+      "ramp_rate_kw_per_s": 10.0,
+      "round_trip_eff": 0.9,
+      "self_discharge_percent_per_day": 0.1,
+      "state_file": "stockholm-bess.json",
+      "state_save_interval_s": 60.0,
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55102,
+          "unit_id": 1,
+          "register_map": "bess_modbus.yaml"
+        }
+      ]
+    },
+    {
+      "comment": "Site meter at the point of common coupling.",
+      "type": "energy_meter",
+      "protocols": [
+        {
+          "kind": "modbus_tcp",
+          "ip": "0.0.0.0",
+          "port": 55103,
+          "unit_id": 1,
+          "register_map": "energy_meter_modbus.yaml"
+        }
+      ]
+    }
+  ]
+}

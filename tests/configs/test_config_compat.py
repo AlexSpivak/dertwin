@@ -24,9 +24,12 @@ def test_configs_are_discovered():
 
 @pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=lambda p: p.name)
 @pytest.mark.asyncio
-async def test_config_builds_and_runs(config_path):
+async def test_config_builds_and_runs(config_path, tmp_path):
     config = load_config(config_path)
     config["real_time"] = False
+    # Keep the run hermetic: a config with a BESS state_file would otherwise
+    # write into the repo's own state directory.
+    config["state_root"] = str(tmp_path)
 
     site = SiteController(config)
     site.build()

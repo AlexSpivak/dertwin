@@ -49,7 +49,7 @@ Transposition:
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 SOLAR_CONSTANT_W_M2 = 1367.7
@@ -341,6 +341,80 @@ def ineichen_ghi(
         ghi *= math.exp(0.01 * airmass ** 1.8)
 
     return clamp_to_extraterrestrial(ghi, position, utc_time)
+
+
+def ineichen_dni(
+    position: SolarPosition,
+    utc_time: datetime,
+    altitude_m: float = 0.0,
+    linke_turbidity: float = 3.0,
+) -> float:
+    """
+    Ineichen & Perez (2002) clear-sky direct normal irradiance, W/m².
+
+    The companion of `ineichen_ghi`, and the physical ceiling on any beam
+    component: it is what the atmosphere can actually transmit along the
+    path to the sun.
+
+    This matters because the Erbs correlation infers DNI by dividing the
+    diffuse-corrected GHI by cos(zenith), which blows up as the sun
+    approaches the horizon. Two degrees above the horizon in a Nordic
+    December, Erbs reports a beam of ~1180 W/m² — 84% of the extraterrestrial
+    value, through some twenty-five airmasses. This equation gives ~40.
+    """
+
+    cos_z = position.cos_zenith
+    if cos_z <= 0.0:
+        return 0.0
+
+    airmass = absolute_airmass(position.zenith_deg, altitude_m)
+    if not math.isfinite(airmass):
+        return 0.0
+
+    fh1 = math.exp(-altitude_m / 8000.0)
+    b = 0.664 + 0.163 / fh1
+
+    dni = (
+        b
+        * extraterrestrial_irradiance(utc_time)
+        * math.exp(-0.09 * airmass * (linke_turbidity - 1.0))
+    )
+
+    return max(0.0, dni)
+
+
+def limit_beam_to_clear_sky(
+    components: "IrradianceComponents",
+    utc_time: datetime,
+    altitude_m: float = 0.0,
+    linke_turbidity: float = 3.0,
+) -> "IrradianceComponents":
+    """
+    Cap DNI at what the atmosphere can transmit, moving the excess to DHI.
+
+    GHI is preserved exactly: energy the beam cannot carry arrives as diffuse,
+    which is what actually happens.
+    """
+
+    position = components.position
+    cos_z = position.cos_zenith
+
+    if components.dni <= 0.0 or cos_z <= 0.0:
+        return components
+
+    ceiling = ineichen_dni(
+        position, utc_time,
+        altitude_m=altitude_m, linke_turbidity=linke_turbidity,
+    )
+
+    if components.dni <= ceiling:
+        return components
+
+    return replace(
+        components,
+        dni=ceiling,
+        dhi=max(0.0, components.ghi - ceiling * cos_z),
+    )
 
 
 def clear_sky_ghi(

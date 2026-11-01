@@ -35,6 +35,7 @@ Thumbs.db
 .env
 .env.*
 
-# BESS SOC persistence files
-state/
+# BESS SOC persistence files — keep the directory, ignore the state itself
+state/*
+!state/.gitkeep
 *.state.json
