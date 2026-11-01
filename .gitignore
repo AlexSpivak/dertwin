@@ -34,3 +34,7 @@ Thumbs.db
 # --- Environment variables ---
 .env
 .env.*
+
+# BESS SOC persistence files
+state/
+*.state.json

@@ -263,12 +263,18 @@ def test_soc_limit_writes():
 
 
 def test_soc_limits_actually_affect_derating():
-    """Writing new SOC limits must change physical behavior, not just store values."""
+    """
+    Writing new SOC limits must change physical behavior, not just store values.
+
+    Legacy taper path — the hard-stop equivalent lives in
+    tests/devices/bess/test_battery_hard_stop.py.
+    """
     bess = BESSSimulator(
         capacity_kwh=100.0,
         initial_soc=35.0,
         max_discharge_kw=20.0,
         ramp_rate_kw_per_s=1000.0,
+        limit_mode="taper",
     )
     bess.apply_commands({"start_stop_standby": 1})
 
