@@ -47,6 +47,7 @@ class SiteController:
     def __init__(self, config: Dict):
         self.config = config
         self.register_map_root = Path(config.get("register_map_root", "."))
+        self.data_root = Path(config.get("data_root", "."))
 
         self.clock = SimulationClock(
             step=config.get("step", 0.1),
@@ -91,7 +92,8 @@ class SiteController:
 
         if self.config.get("external_models"):
             self.external_models = ExternalModels.from_config(
-                self.config["external_models"]
+                self.config["external_models"],
+                data_root=self.data_root,
             )
         else:
             self.external_models = ExternalModels.build_default()
@@ -99,6 +101,7 @@ class SiteController:
         self.external_models.power_model = ExternalModels.build_power_model(
             self._devices_by_type,
             self.config.get("external_models"),
+            load_model=self.external_models.load_model,
         )
 
         self.engine = SimulationEngine(

@@ -138,6 +138,7 @@ Key properties:
 - Realistic CHP simulation — MWM TEM Evolution-compatible state machine, configurable startup timings, thermal physics, heat output
 - Config-driven site topology — add devices by editing JSON
 - Runtime asset management — `add_asset` / `remove_asset` for live scenario scripting and EMS-driven rosters
+- Stochastic site load — daily profile, weekday/weekend factor, slow mean-reverting drift and fast noise, all seedable
 - Irradiance, ambient temperature, grid frequency, and grid voltage models
 - Multi-device support across independent ports
 - External model events (voltage sags, frequency deviations)
@@ -216,6 +217,7 @@ Sites are defined in JSON. Each asset declares its type, parameters, and protoco
 **`real_time: false`** — caller drives the clock via `step_once()`, use for tests
 **`start_time_h`** — sets simulation clock on startup (e.g. `12.0` for noon). All external models start from this time.
 **`register_map_root`** — path to register map directory, resolved relative to the working directory where you run `dertwin`
+**`data_root`** — path for CSV inputs (`load.profile.csv`), resolved relative to the config file. Defaults to the working directory.
 **`ip: "0.0.0.0"`** — required when running inside Docker so port mapping works. Use `127.0.0.1` for local-only.
 
 ### Supported asset types
@@ -226,6 +228,63 @@ Sites are defined in JSON. Each asset declares its type, parameters, and protoco
 | `inverter` | `PVSimulator` | `rated_kw`, `module_efficiency`, `area_m2` |
 | `chp` | `CHPSimulator` | `rated_kw`, `heat_to_power_ratio`, `min_load_percent`, `max_load_percent` |
 | `energy_meter` | `EnergyMeterSimulator` | (no parameters — observes the site power model) |
+
+### Site load
+
+The site load is multiplicative, so each piece can be configured without
+fighting the others:
+
+```
+load_kw = base_kw × profile(hour) × weekday × drift × (1 + noise)
+```
+
+```json
+{
+  "external_models": {
+    "load": {
+      "base_kw": 50.0,
+      "profile": {
+        "model": "hourly",
+        "hourly": [0.55, 0.52, 0.50, 0.50, 0.52, 0.60, 0.75, 0.95,
+                   1.05, 1.05, 1.00, 0.98, 0.95, 0.95, 0.98, 1.05,
+                   1.20, 1.35, 1.30, 1.15, 1.00, 0.85, 0.70, 0.60],
+        "interpolate": true,
+        "normalize": true
+      },
+      "weekday_factor": 1.0,
+      "weekend_factor": 0.75,
+      "start_weekday": "monday",
+      "drift": { "sigma": 0.12, "tau_s": 10800.0, "min_factor": 0.7, "max_factor": 1.3 },
+      "noise": { "sigma": 0.02, "tau_s": 30.0 },
+      "min_kw": 0.0,
+      "max_kw": null,
+      "seed": 7
+    }
+  }
+}
+```
+
+**`base_kw`** — the *average* load. The profile is normalised to a daily mean of
+1.0, so changing the shape never moves the average.
+**`profile.model`** — `flat` (default, the pre-0.2 constant), `hourly` (24
+factors), `parametric` (a night baseline with morning and evening bumps), or
+`csv` (an hour-of-day table at any resolution; a `kw` column sets `base_kw`
+from its mean).
+Hourly factors sit at their **hour centres** and interpolate circularly, so
+there is no discontinuity at midnight.
+**`weekend_factor`** — applied on Saturday and Sunday. The clock is an offset
+from the start of the run rather than a date, so `start_weekday` places the week
+and it advances at each simulated midnight.
+**`drift`** — slow mean-reverting random walk, the "this week is busier than
+usual" term. `sigma` is the standard deviation of the multiplicative factor and
+`tau_s` its correlation time; bounded by `min_factor` / `max_factor`.
+**`noise`** — the same process on a timescale of seconds.
+**`seed`** — one seed drives both random terms. Drift and noise are off unless
+configured.
+
+The legacy `external_models.power.base_load_w` still works and is still a flat
+load; a `load` block supersedes it, and a `load` block with no `base_kw`
+inherits its value.
 
 ### Protocol Configuration
 
@@ -407,7 +466,7 @@ docker run \
 pytest
 ```
 
-The test suite covers device physics (BESS, PV, CHP, energy meter), register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
+The test suite covers device physics (BESS, PV, CHP, energy meter), external world models including the statistics of the stochastic load, register encoding with per-register endianness, FC02 discrete input routing, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
 
 ---
 

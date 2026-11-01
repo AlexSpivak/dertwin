@@ -12,6 +12,8 @@ All models are designed to be **deterministic**, fully **simulation-time driven*
 - [Modules](#modules)
   - [ambient_temperature.py](#ambient_temperaturepy)
   - [irradiance.py](#irradiancepy)
+  - [load.py](#loadpy)
+  - [stochastic.py](#stochasticpy)
   - [grid_frequency.py](#grid_frequencypy)
   - [grid_voltage.py](#grid_voltagepy)
   - [power_flow.py](#power_flowpy)
@@ -25,6 +27,7 @@ All models are designed to be **deterministic**, fully **simulation-time driven*
 - **Ambient conditions:** Deterministic daily temperature profiles
 - **Solar irradiance:** Clear-sky sinusoidal irradiance curves
 - **Grid frequency & voltage:** Drift, noise, events, and deterministic disturbances
+- **Site load:** Daily profile, weekday/weekend factor, slow mean-reverting drift and fast noise — seedable
 - **Site power flow:** Aggregates load, PV, BESS, and CHP contributions
 - **Deterministic update cycle:** External models update before devices in simulation
 - **Configurable defaults:** Parameters such as nominal voltage, frequency, irradiance, and temperature
@@ -72,6 +75,92 @@ update(sim_time: float, dt: float)
 get_irradiance() -> float
 set_irradiance(value: float)
 ```
+
+### `load.py`
+
+**Class:** `SiteLoadModel`; profiles `FlatProfile`, `HourlyProfile`,
+`TabulatedProfile`, `ParametricProfile`; factory `build_load_model`
+
+The site load. It used to be `lambda t: base_load` — five kilowatts by default,
+the same at 03:00 as at 18:00 and the same on a Sunday as on a Tuesday. An EMS
+tested against that never sees the thing it exists to handle.
+
+The load is multiplicative, which is what lets the pieces be configured
+without fighting each other:
+
+```
+load_kw = base_kw · profile(hour) · weekday · drift · (1 + noise)
+```
+
+| Term | What it is |
+|---|---|
+| `profile` | The daily shape. Normalised to a daily mean of 1.0, so it only ever changes the shape and `base_kw` keeps meaning *average* load. |
+| `weekday` | One of two factors, chosen by the day of the week. |
+| `drift` | Slow mean-reverting random walk (Ornstein-Uhlenbeck, `tau` in hours) — the "this week is busier than usual" term. Bounded by `min_factor` / `max_factor`. |
+| `noise` | The same process on a timescale of seconds — individual equipment switching. |
+
+Both random terms draw from one stream, so a single `seed` makes the whole load
+reproducible. Both are off by default.
+
+#### Daily shapes
+
+| `profile.model` | Input |
+|---|---|
+| `flat` | Nothing. The pre-0.2 constant. **The default.** |
+| `hourly` | 24 factors, one per hour |
+| `parametric` | A night baseline with a morning and an evening Gaussian bump |
+| `csv` | An hour-of-day table at any resolution |
+
+Hourly factors are placed at their **hour centres** and interpolated
+circularly: hourly figures are averages over the hour, so centring them is what
+reproduces the intended shape, and wrapping means there is never a
+discontinuity at midnight. With `interpolate: false` the nearest point wins,
+which makes hour 8's value apply across the whole of hour 8.
+
+A CSV of absolute `kw` is a shape *plus* a level: it is normalised to a mean of
+1.0 and the level becomes the default `base_kw`, so an explicit `base_kw` still
+rescales it.
+
+#### Day of the week
+
+The clock is an offset from the start of the run, not a date, so the week is
+placed by `start_weekday` (a name or 0–6 with Monday = 0) and advances at each
+simulated midnight. `advance()` also accepts an optional absolute UTC instant,
+and when one is given the real calendar wins — so this composes with an
+absolute clock rather than duplicating it.
+
+**Key methods:**
+```python
+advance(sim_time: float, dt: float, utc_time: datetime | None = None)
+get_power_kw() -> float
+weekday_at(sim_time, utc_time=None) -> int     # Monday = 0
+is_weekend(sim_time, utc_time=None) -> bool
+```
+
+The model is an external world model, not a device: no registers, no protocol
+of its own. It reaches the meter the way the constant always did, through the
+site power balance.
+
+### `stochastic.py`
+
+**Class:** `OrnsteinUhlenbeck`
+
+Mean-reverting noise with a stationary `N(0, sigma²)` distribution, using the
+exact discrete-time solution rather than an Euler step:
+
+```
+a = exp(-dt / tau)
+x <- a·x + sqrt(1 - a²) · sigma · N(0, 1)
+```
+
+That matters here because the simulation step is configurable: an Euler
+discretisation would quietly change the amplitude of the noise when you switch
+from 0.1 s to 60 s steps. The test suite pins the stationary spread across six
+orders of magnitude of `dt`.
+
+The process starts drawn from its stationary distribution, so there is no
+warm-up transient, and a disabled process (`sigma = 0`) draws nothing from the
+random stream — so enabling it cannot shift an unrelated process's path.
 
 ### `grid_frequency.py`
 
@@ -150,7 +239,9 @@ grid_power = model.grid_power_kw   # 50 - 10 - (-2) - 30 = 12 kW import
 ```
 
 **Sign conventions:**
-- `base_load_supplier(t)` → site load in kW (always positive)
+- `base_load_supplier(t)` → site load in kW (always positive). When wired by
+  `build_power_model` this ignores `t` and reads the current value from
+  `SiteLoadModel`, which `ExternalModels.update` has already advanced.
 - `pv_supplier()` → PV generation in kW (always non-negative)
 - `bess_supplier()` → BESS power in kW; **positive = discharge** (acts as generator), **negative = charge** (acts as load)
 - `chp_supplier()` → CHP generation in kW (always non-negative)
@@ -167,6 +258,7 @@ world → devices → telemetry
 ```
 
 **Supported models:**
+- Site load
 - Site power
 - Grid frequency
 - Grid voltage
@@ -176,10 +268,17 @@ world → devices → telemetry
 **Key methods:**
 ```python
 update(sim_time: float, dt: float)
-build_power_model(devices_by_type, config=None)
+build_power_model(devices_by_type, config=None, load_model=None)
 build_default()
-from_config(config: Dict)
+from_config(config: Dict, data_root=None)
 ```
+
+`update` advances the load **before** the power balance, because the balance
+reads the load through `base_load_supplier`. Advancing it here, against the
+engine's own simulation time, is also what keeps the load's daily profile in
+phase with the irradiance and ambient temperature models — `SitePowerModel`
+keeps a private clock that starts at zero and ignores `start_time_h`, so a
+supplier keyed off that argument would have sat hours out of phase.
 
 `build_power_model` automatically wires up `pv_supplier`, `bess_supplier`, and `chp_supplier` based on the device types present in the site, summing `total_active_power` from PV, `active_power` from BESS, and `actual_power_kw` from CHP.
 
