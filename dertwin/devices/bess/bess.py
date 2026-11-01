@@ -13,31 +13,28 @@ class BESSModel:
         self.inverter.set_target_power(kw)
 
     def step(self, dt: float):
-        # Requested power from controller
-        requested = self.inverter.target_power
+        # The setpoint is left exactly as the EMS wrote it. Clamping happens
+        # downstream, so dispatch resumes by itself once the pack has headroom.
 
-        # Battery capability limits
+        # Inverter applies ramp limits toward the setpoint
+        ramped_power = self.inverter.step(dt)
+
+        # The battery is the single clamp authority: rating, temperature
+        # capability and the hard SOC window all land here.
+        actual_power = self.battery.step(ramped_power, dt)
+
+        # Inverter state follows reality, so reactive/apparent power and the
+        # next ramp step start from what the pack actually did.
+        self.inverter.sync_actual(actual_power)
+
+        # Capability telemetry, evaluated after the step
         min_kw, max_kw = self.battery.get_power_limits()
-
-        # Clamp requested to allowed range
-        allowed = max(min_kw, min(max_kw, requested))
-
-        # Send allowed request to inverter
-        self.inverter.set_target_power(allowed)
-
-        # Inverter applies ramp limits
-        actual_power = self.inverter.step(dt)
-
-        # Battery integrates actual power
-        actual_power = self.battery.step(actual_power, dt)
-
-        # Capability telemetry
         available_charge = max(0.0, min(self.inverter.max_charge_kw, -min_kw))
         available_discharge = max(0.0, min(self.inverter.max_discharge_kw, max_kw))
 
         return BESSTelemetry(
             service_voltage=self.battery.open_circuit_voltage(),
-            service_current=actual_power,
+            service_current=self.service_current(actual_power),
             system_soc=self.battery.soc,
             battery_temperature=self.battery.temperature_c,
             active_power=actual_power,
@@ -56,3 +53,10 @@ class BESSModel:
             grid_voltage_bc=self.inverter.grid_voltage_ll,
             grid_voltage_ca=self.inverter.grid_voltage_ll,
         )
+
+    def service_current(self, power_kw: float) -> float:
+        """DC-side current in amps — the register is amps, not kW."""
+        voc = self.battery.open_circuit_voltage()
+        if voc == 0:
+            return 0.0
+        return power_kw * 1000.0 / voc

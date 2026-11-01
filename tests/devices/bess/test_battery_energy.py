@@ -25,7 +25,8 @@ def test_discharge_energy_decreases_soc_correctly():
 
     battery.step(power_kw, dt)
 
-    expected_delta = 10 * battery.discharge_eff
+    # Discharging 10 kWh AC drains 10/eta from the pack, not 10*eta.
+    expected_delta = 10 / battery.discharge_eff
     expected_soc = 50 - (expected_delta / 100) * 100
 
     assert pytest.approx(battery.soc, rel=1e-6) == expected_soc
