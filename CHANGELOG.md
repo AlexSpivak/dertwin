@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] — unreleased
+## [0.2.1] — 2026-11-04
 
 ### Fixed
 
@@ -79,5 +79,5 @@ All notable changes to this project are documented here. The format follows
 - Two location-aware example site configurations, differing only by
   configuration.
 
-[0.2.1]: https://github.com/AlexSpivak/dertwin/compare/v0.2.0...HEAD
+[0.2.1]: https://github.com/AlexSpivak/dertwin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/AlexSpivak/dertwin/releases/tag/v0.2.0
