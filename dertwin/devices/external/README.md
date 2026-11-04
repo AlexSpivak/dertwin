@@ -110,16 +110,31 @@ clear-sky GHI that reaches the ground. Two timescales, because real weather has
 both:
 
 ```
-z  <- phi·z + sqrt(1 - phi²)·sigma_day·N(0,1)     once per UTC day   (AR(1))
+z      = keyed AR(1) at the UTC date's day number   (persistence phi, spread sigma_day)
 kt_day = kt_min + (1 - kt_min)·expit(logit(m) + z)
-x  <- a·x + sqrt(1 - a²)·intraday_sigma·N(0,1)    every step, a = exp(-dt/tau)  (OU)
-kt = clamp(kt_day + x, kt_min, 1)
+x     <- a·x + sqrt(1 - a²)·intraday_sigma·N(0,1)   every step, a = exp(-dt/tau)  (OU)
+kt     = clamp(kt_day + x, kt_min, 1)
 ```
 
 The daily index is drawn in logit space, which keeps it bounded without
 clipping artefacts, and `phi` alone controls how long overcast spells last.
 Both processes start in their stationary distribution, so there is no warm-up
 transient. By symmetry the **median** daily index is exactly `mean_kt`.
+
+The daily regime is **keyed**, not stepped. `z` for a date is read out of
+`KeyedAR1` (see `stochastic.py`) at that date's proleptic day number, so with a
+`seed` it is a function of `(seed, date)`: a restart cannot change today's
+weather, and the date the run starts on cannot change any other date. An
+independent draw per date would be restart-proof too and would quietly set
+`phi` to zero; the keyed chain keeps the persistence. One day's regime costs
+`window` multiply-adds, set by `phi` alone — 49 at the default `phi = 0.65` —
+with no epoch to count from and no catch-up loop for a date far away.
+
+The intraday term is free-running on purpose: it is advanced with the engine's
+dt, which is what keeps its spread independent of the step size, and it is a
+zero-mean wobble with a correlation time of minutes. A restart mid-day
+redraws it and leaves the day's regime alone. Unseeded, the whole model is
+random per run, as before.
 
 `sigma_day` is in logit space. The default `0.9` gives a daily index with a
 standard deviation of about 0.17 and genuinely overcast days a few percent of
@@ -188,11 +203,21 @@ load_kw = base_kw · profile(hour) · weekday · drift · (1 + noise)
 |---|---|
 | `profile` | The daily shape. Normalised to a daily mean of 1.0, so it only ever changes the shape and `base_kw` keeps meaning *average* load. |
 | `weekday` | One of two factors, chosen by the day of the week. |
-| `drift` | Slow mean-reverting random walk (Ornstein-Uhlenbeck, `tau` in hours) — the "this week is busier than usual" term. Bounded by `min_factor` / `max_factor`. |
-| `noise` | The same process on a timescale of seconds — individual equipment switching. |
+| `drift` | Slow mean-reverting random walk (Ornstein-Uhlenbeck, `tau` in hours) — the "this week is busier than usual" term. Bounded by `min_factor` / `max_factor`. Keyed on simulated time. |
+| `noise` | The same process on a timescale of seconds — individual equipment switching. Free-running. |
 
-Both random terms draw from one stream, so a single `seed` makes the whole load
-reproducible. Both are off by default.
+Both random terms come from one `seed`, through a stream each, so the whole
+load is reproducible and neither term's draws shift the other's. Both are off
+by default.
+
+The drift is a `KeyedOrnsteinUhlenbeck`: its factor at an instant is a function
+of `(seed, instant)`, so a restarted process agrees with the one it replaced
+instead of replaying the same afternoon from the seed. The instant is UTC when
+the config has a `sim_start_utc`, and seconds since the start of the run
+otherwise — in which case a restart resets the clock too, and nothing can be
+done about it. Sampling happens on a fixed lattice of `tau_s / 16`, not on the
+tick, which is what keeps `sigma` and `tau_s` independent of the simulator's
+step.
 
 #### Daily shapes
 
@@ -235,7 +260,8 @@ site power balance.
 
 ### `stochastic.py`
 
-**Class:** `OrnsteinUhlenbeck`
+**Classes:** `OrnsteinUhlenbeck`, `KeyedAR1`, `KeyedOrnsteinUhlenbeck`;
+helpers `derive_seed`, `keyed_standard_normal`
 
 Mean-reverting noise with a stationary `N(0, sigma²)` distribution, using the
 exact discrete-time solution rather than an Euler step:
@@ -253,6 +279,51 @@ orders of magnitude of `dt`.
 The process starts drawn from its stationary distribution, so there is no
 warm-up transient, and a disabled process (`sigma = 0`) draws nothing from the
 random stream — so enabling it cannot shift an unrelated process's path.
+
+#### Keyed processes
+
+`OrnsteinUhlenbeck` is *free-running*: it carries a state and steps it once per
+tick, so its trajectory belongs to the process that started it and a restart
+replays it from the seed. For anything slow enough to matter across a restart —
+a weather regime, a weekly load drift — that is a bug, not a feature.
+
+`KeyedAR1` is the fix. The value at step `n` is a pure function of
+`(seed, n)`, built from the moving-average form of the AR(1) recursion:
+
+```
+x_n = phi·x_{n-1} + sqrt(1 - phi²)·sigma·e_n
+    = sqrt(1 - phi²)·sigma · Σ_{j≥0} phi^j · e_{n-j}
+```
+
+Each innovation `e_k` is a standard normal keyed on `(seed, stream, k)`:
+hashed into the seed of a throwaway generator rather than read off a position
+in one long stream, so any step can be evaluated directly, at the same cost, in
+any order. The sum is truncated after `window` terms, which leaves an error of
+`sigma · phi^window`; with a tolerance of `1e-9`,
+
+```
+window = ceil(log(tolerance) / log(phi))      # 49 at phi = 0.65, 197 at 0.9
+```
+
+So one evaluation costs `window` multiply-adds and one hash per innovation not
+already cached, both fixed by `phi`. Nothing scales with `n`: there is no epoch
+to iterate from, and step 10 and step 10,000,000 cost the same. A `phi` very
+close to 1 is capped at `MAX_KEYED_WINDOW`, which costs truncation accuracy,
+never reproducibility.
+
+`KeyedOrnsteinUhlenbeck` is the same idea against a clock. It samples a keyed
+AR(1) on a fixed lattice of `tau_s / 16` and holds between lattice points, so
+on the lattice it is the exact discrete-time solution — stationary spread
+exactly `sigma`, autocorrelation exactly `exp(-lag / tau)` — while the value at
+an instant depends on *when* it is asked about rather than on how the caller
+got there. Fixing the lattice to the process's own correlation time instead of
+to the tick is what makes `sigma` and `tau_s` independent of the simulator's
+step.
+
+`derive_seed(seed, stream)` gives each process its own stream from one
+configured seed, so a process that draws more or fewer values cannot shift
+another's numbers. With `seed=None` it is random, so an unseeded run stays
+random per run.
 ### `timeseries.py`
 
 **Class:** `TimeSeries`
@@ -435,8 +506,11 @@ for t in range(0, 86400, 600):  # 1 day, 10-minute steps
 
 ## Deterministic Simulation Notes
 - All models are simulation-time driven; internal time is always UTC.
-- Stochastic models are seedable: set `cloud.seed`, `grid_frequency.seed` and
-  `grid_voltage.seed` for a reproducible run.
+- Stochastic models are seedable: set `cloud.seed`, `load.seed`,
+  `grid_frequency.seed` and `grid_voltage.seed` for a reproducible run. The
+  cloud regime and the load drift are keyed on simulated time, so they are
+  reproducible *per simulated date* and survive a restart; see `clouds.py` and
+  `load.py` above.
 - The update sequence guarantees world → devices → telemetry.
 - Supports both constant and stochastic/deterministic variations.
 - Provides configurable defaults for quick prototyping.

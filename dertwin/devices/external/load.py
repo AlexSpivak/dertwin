@@ -15,7 +15,8 @@ without the pieces fighting each other:
   the shape, never the mean.
 - `weekday` is one of two factors, picked by the day of the week.
 - `drift` is a slow mean-reverting random walk (Ornstein-Uhlenbeck, hours), the
-  "this week is busier than usual" term, bounded.
+  "this week is busier than usual" term, bounded. Keyed on simulated time, so
+  a restart does not replay it.
 - `noise` is a fast one (seconds to a minute), the switching of individual
   equipment.
 
@@ -29,13 +30,16 @@ through the site power balance.
 import csv
 import logging
 import math
-import random
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-from dertwin.devices.external.stochastic import OrnsteinUhlenbeck
+from dertwin.devices.external.stochastic import (
+    KeyedOrnsteinUhlenbeck,
+    OrnsteinUhlenbeck,
+    derive_seed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,10 @@ SECONDS_PER_DAY = 86400.0
 _NORMALISE_SAMPLES = 96
 
 DEFAULT_BASE_KW = 5.0
+
+# Random stream names, one per term, so neither can shift the other's numbers.
+_DRIFT_STREAM = "load-drift"
+_NOISE_STREAM = "load-noise"
 
 
 def _circular_hour_delta(a: float, b: float) -> float:
@@ -344,6 +352,19 @@ class SiteLoadModel:
     balance. Because it is advanced from the engine's own simulation time, its
     daily profile is in phase with the irradiance and ambient temperature
     models, which a supplier keyed off the power model's private clock was not.
+
+    The drift is keyed on simulated time rather than stepped: the factor for
+    an instant is a function of (seed, that instant), so a process that is
+    restarted twice a day does not keep replaying the same "busy afternoon"
+    from its seed. With an absolute instant — a config with `sim_start_utc` —
+    the key is UTC, which is what makes it survive a restart; without one the
+    clock itself restarts at zero, so there is nothing for the drift to be
+    keyed on that a restart would not reset as well.
+
+    The fast noise stays free-running. It is zero-mean with a correlation time
+    of half a minute: a restart does repeat its first few seconds from the
+    seed, and by the time anything downstream has averaged a minute of data
+    there is nothing left of that to see.
     """
 
     def __init__(
@@ -393,13 +414,19 @@ class SiteLoadModel:
         self.min_kw = min_kw
         self.max_kw = max_kw
 
-        # One stream, so a single seed drives both random terms.
-        self._rng = random.Random(seed)
-        self._drift = OrnsteinUhlenbeck(
-            sigma=drift_sigma, tau_s=drift_tau_s, rng=self._rng
+        # One seed drives both random terms, through a stream each: a term
+        # that draws more or fewer values cannot shift the other's numbers.
+        self.seed = seed
+        self._drift = KeyedOrnsteinUhlenbeck(
+            sigma=drift_sigma,
+            tau_s=drift_tau_s,
+            seed=seed,
+            stream=_DRIFT_STREAM,
         )
         self._noise = OrnsteinUhlenbeck(
-            sigma=noise_sigma, tau_s=noise_tau_s, rng=self._rng
+            sigma=noise_sigma,
+            tau_s=noise_tau_s,
+            seed=derive_seed(seed, _NOISE_STREAM),
         )
 
         self._power_kw = 0.0
@@ -425,6 +452,19 @@ class SiteLoadModel:
     def is_weekend(self, sim_time: float, utc_time: Optional[datetime] = None) -> bool:
         return self.weekday_at(sim_time, utc_time) >= 5
 
+    @staticmethod
+    def drift_time(sim_time: float, utc_time: Optional[datetime] = None) -> float:
+        """
+        The instant the drift is keyed on, in seconds.
+
+        An absolute UTC instant when the config named a date, so the same
+        moment keys the same drift in every process that simulates it;
+        otherwise seconds since the start of the run, which is all the clock
+        has to offer.
+        """
+
+        return sim_time if utc_time is None else utc_time.timestamp()
+
     def drift_factor(self) -> float:
         return max(
             self.drift_min_factor,
@@ -437,6 +477,9 @@ class SiteLoadModel:
     # --------------------------------------------------
 
     def _recompute(self, sim_time: float, utc_time: Optional[datetime]) -> None:
+        # Point the keyed drift at this instant; drift_factor() reads it there.
+        self._drift.value_at(self.drift_time(sim_time, utc_time))
+
         hour = (sim_time / 3600.0) % HOURS_PER_DAY
 
         power_kw = (
@@ -459,7 +502,6 @@ class SiteLoadModel:
     def advance(
         self, sim_time: float, dt: float, utc_time: Optional[datetime] = None
     ) -> None:
-        self._drift.advance(dt)
         self._noise.advance(dt)
         self._recompute(sim_time, utc_time)
 

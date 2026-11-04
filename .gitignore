@@ -39,3 +39,10 @@ Thumbs.db
 state/*
 !state/.gitkeep
 *.state.json
+
+# --- Credentials ---
+# A PyPI token sitting in the working tree is one `git add .` from being
+# published. Ignored here as well as kept out of the sdist.
+api_token_pypi
+.pypirc
+*.pypirc
