@@ -13,17 +13,23 @@ Two timescales, because real weather has both:
 - within the day, passing cloud: an Ornstein-Uhlenbeck perturbation with a
   correlation time of minutes.
 
-Everything is seedable and deterministic.
+Everything is seedable and deterministic. With a seed, the daily regime is
+keyed on the UTC calendar date: the weather of a given day is a function of
+(seed, date) and of nothing else, so restarting the process — however often,
+and whatever date the run starts on — cannot change it. Without a seed the run
+is random, as it has always been.
 """
 
-import logging
 import math
-import random
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from dertwin.devices.external.stochastic import (
+    KeyedAR1,
+    OrnsteinUhlenbeck,
+    derive_seed,
+)
 
 
 CLOUD_MODEL_NONE = "none"
@@ -31,8 +37,10 @@ CLOUD_MODEL_AR1 = "ar1"
 CLOUD_MODEL_MARKOV = "markov"
 VALID_CLOUD_MODELS = (CLOUD_MODEL_NONE, CLOUD_MODEL_AR1, CLOUD_MODEL_MARKOV)
 
-# Guard against a config that jumps the clock by centuries.
-_MAX_DAY_CATCHUP = 10_000
+# Random stream names. The daily regime and the intraday perturbation draw
+# from separate streams, so neither can shift the other's numbers.
+_DAY_STREAM = "cloud-day"
+_INTRADAY_STREAM = "cloud-intraday"
 
 
 def _logit(p: float) -> float:
@@ -77,13 +85,29 @@ class AR1CloudModel(CloudModel):
     By symmetry of the innovation the *median* daily index is exactly mean_kt;
     the mean sits a little closer to the middle of the range.
 
-        z   <- phi·z + sqrt(1 - phi²)·sigma_day·N(0,1)      once per UTC day
+        z      = keyed AR(1) at the UTC date's day number (persistence phi,
+                 stationary spread sigma_day)
         kt_day = kt_min + (1 - kt_min)·expit(logit(m) + z)
-        x   <- a·x + sqrt(1 - a²)·intraday_sigma·N(0,1)     every step, a = exp(-dt/tau)
-        kt  = clamp(kt_day + x, kt_min, 1)
+        x     <- a·x + sqrt(1 - a²)·intraday_sigma·N(0,1)   every step, a = exp(-dt/tau)
+        kt     = clamp(kt_day + x, kt_min, 1)
 
-    Both processes are drawn from their stationary distribution at
-    construction, so there is no warm-up transient.
+    The daily regime is *keyed*, not stepped: `z` for a date is read straight
+    out of `KeyedAR1` at that date's proleptic day number, so it depends on
+    (seed, date) and not on when the process started or how long it has been
+    up. A process restarted three times on the same day reports the same
+    regime each time, and starting the run a hundred days earlier changes
+    nothing about any later day. The alternative — an independent draw per
+    date — would be restart-proof too, but it would set phi to zero and take
+    the day-to-day persistence with it; `KeyedAR1` explains how the sum keeps
+    both.
+
+    The intraday perturbation is deliberately *not* keyed. It is advanced with
+    whatever dt the engine hands it, which is the only way its spread can stay
+    independent of the simulator's timestep, and it is a zero-mean wobble with
+    a correlation time of minutes: nothing about it is worth reproducing
+    across a restart, and nothing about it moves the day's regime. It is drawn
+    from its stationary distribution at construction, so there is no warm-up
+    transient either way.
     """
 
     def __init__(
@@ -122,66 +146,61 @@ class AR1CloudModel(CloudModel):
         self.intraday_sigma = intraday_sigma
         self.intraday_tau_s = intraday_tau_s
 
-        self._rng = random.Random(seed)
+        self.seed = seed
         self._mean_logit = _logit((mean_kt - kt_min) / (1.0 - kt_min))
 
-        # Start both processes in their stationary distribution
-        self._z = self._rng.gauss(0.0, sigma_day)
-        self._x = self._rng.gauss(0.0, intraday_sigma)
+        self._day_regime = KeyedAR1(
+            phi=phi, sigma=sigma_day, seed=seed, stream=_DAY_STREAM
+        )
+        self._intraday = OrnsteinUhlenbeck(
+            sigma=intraday_sigma,
+            tau_s=intraday_tau_s,
+            seed=derive_seed(seed, _INTRADAY_STREAM),
+        )
 
-        self._date = None
+        self._date: Optional[date] = None
+
+        # Until the first advance names a date there is no day to look up, so
+        # the regime sits at the median, which is mean_kt.
+        self._z = 0.0
         self._kt_day = self._kt_day_from_z()
 
     # --------------------------------------------------
+
+    @property
+    def day_regime_window(self) -> int:
+        """How many keyed innovations one day's regime is summed from."""
+        return self._day_regime.window
 
     def _kt_day_from_z(self) -> float:
         return self.kt_min + (1.0 - self.kt_min) * _expit(self._mean_logit + self._z)
 
-    def _step_day(self) -> None:
-        self._z = self.phi * self._z + math.sqrt(
-            1.0 - self.phi ** 2
-        ) * self.sigma_day * self._rng.gauss(0.0, 1.0)
+    def _set_day(self, day: date) -> None:
+        self._z = self._day_regime.value_at(day.toordinal())
         self._kt_day = self._kt_day_from_z()
-
-    def _step_intraday(self, dt: float) -> None:
-        # Skipping the draw, not just scaling it to zero, keeps the random
-        # stream independent of how many steps the intraday process took.
-        if dt <= 0.0 or self.intraday_sigma == 0.0:
-            return
-
-        a = math.exp(-dt / self.intraday_tau_s)
-        self._x = a * self._x + math.sqrt(
-            1.0 - a ** 2
-        ) * self.intraday_sigma * self._rng.gauss(0.0, 1.0)
 
     # --------------------------------------------------
 
     def advance(self, utc_time: datetime, dt: float) -> None:
-        date = utc_time.date()
+        today = utc_time.date()
 
-        if self._date is None:
-            self._date = date
-        elif date != self._date:
-            elapsed_days = (date - self._date).days
+        if self._date is None or today > self._date:
+            # Looking the day up costs the same whichever day it is, so a
+            # fresh start, the next midnight and a jump of ten thousand days
+            # are all one evaluation. There is no catch-up loop to bound.
+            self._set_day(today)
+            self._date = today
+        elif today < self._date:
+            # A clock that moved backwards resyncs without redrawing, so a
+            # device that rewinds its clock does not get a new sky for the
+            # instant it lands on. The next day it moves into is keyed as
+            # usual.
+            self._date = today
 
-            if elapsed_days > _MAX_DAY_CATCHUP:
-                logger.warning(
-                    "Cloud model skipped %d days at once; advancing %d and "
-                    "resyncing to %s",
-                    elapsed_days, _MAX_DAY_CATCHUP, date,
-                )
-                elapsed_days = _MAX_DAY_CATCHUP
-
-            # A clock that moved backwards just resyncs, without redrawing.
-            for _ in range(max(0, elapsed_days)):
-                self._step_day()
-
-            self._date = date
-
-        self._step_intraday(dt)
+        self._intraday.advance(dt)
 
     def clear_sky_index(self) -> float:
-        return max(self.kt_min, min(1.0, self._kt_day + self._x))
+        return max(self.kt_min, min(1.0, self._kt_day + self._intraday.value))
 
     @property
     def daily_clear_sky_index(self) -> float:
@@ -216,7 +235,12 @@ def build_cloud_model(config: Optional[dict]) -> CloudModel:
     realistic than a fixed 12-hour day. `enabled: false` (or `model: "none"`)
     turns them off. Note the asymmetry with `ClearSkyIrradianceModel`, whose
     own `cloud_model=None` default means no clouds: configs opt in by default,
-    direct construction does not. Set `cloud.seed` for reproducible runs.
+    direct construction does not.
+
+    Set `cloud.seed` for reproducible runs. With a seed, each UTC date's
+    regime is a function of (seed, date), so restarts and a changed start date
+    leave a given day's weather alone. Without one the run is random, and a
+    restart gets a fresh sky.
     """
 
     cfg = config or {}

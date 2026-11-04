@@ -141,10 +141,10 @@ Key properties:
 - Hard SOC limits on BESS assets — SOC lands exactly on the limit, then power reads zero while the setpoint stays as written
 - Optional SOC persistence across restarts
 - Location- and date-aware clear-sky irradiance — correct sunrise, sunset and seasonal peak for any latitude and day of the year
-- Stochastic cloud cover with persistent day-to-day weather regimes, seedable and reproducible
+- Stochastic cloud cover with persistent day-to-day weather regimes — seeded, a date's weather is reproducible *per date*, so restarts do not replay the same sky
 - Plane-of-array irradiance for tilted, oriented PV arrays, with DC/AC ratio and inverter clipping
 - Irradiance from a CSV, for replaying measured data
-- Stochastic site load — daily profile, weekday/weekend factor, slow mean-reverting drift and fast noise, all seedable
+- Stochastic site load — daily profile, weekday/weekend factor, slow mean-reverting drift keyed on simulated time, and fast noise, all seedable
 - Ambient temperature, grid frequency, and grid voltage models
 - Multi-device support across independent ports
 - External model events (voltage sags, frequency deviations)
@@ -384,7 +384,40 @@ latitude is what switches the model on.
 Ornstein-Uhlenbeck variability. `phi` sets how long overcast spells last,
 `mean_kt` the long-run clear-sky fraction. On by default once a location is
 given; set `seed` for a reproducible run or `enabled: false` for a cloudless
-sky.
+sky. With a `seed`, each day's regime is **keyed on the UTC calendar date**
+— see below.
+
+#### Weather, restarts and the calendar
+
+With `cloud.seed` set, the daily clear-sky index for a simulated UTC date is a
+function of **(seed, date)** and of nothing else. That means:
+
+- restarting the process does not change today's weather, however often it
+  restarts and whatever hour it comes back at;
+- starting the run on a different date does not change any other date — day
+  2026-06-10 looks the same whether the run began that morning or a hundred
+  days earlier;
+- consecutive dates still have the configured persistence `phi` and long-run
+  mean `mean_kt`. The regime is read out of a keyed AR(1) chain rather than
+  drawn independently per date, which is what keeps overcast spells lasting
+  several days instead of collapsing to coin flips.
+
+Before 0.2.1 the chain was seeded once at engine start and stepped from there,
+so every boot replayed the same first day. A deployment restarted twice a day
+got the same opening weather every time, and clear days practically never
+came round.
+
+The intraday variability is deliberately *not* keyed: it is advanced with the
+engine's own timestep, which is what keeps its spread independent of the step
+size, and a restart draws it afresh. So a restart mid-day leaves the day's
+regime untouched but does change the minute-to-minute wobble on top of it.
+
+With **no** `cloud.seed`, behaviour is random per run, exactly as in 0.2.0: a
+fresh process gets a fresh sky. Within a single process the per-date lookup
+still holds, so the same day always reports the same regime.
+
+`series_csv` and `series_column: "kt"` replay are unaffected — a recorded
+series is already a function of the date.
 **`series_csv`** — replay recorded data. With `series_column: "kt"` it drives
 the cloud index and keeps the clear-sky curve; otherwise it is absolute GHI in
 W/m².
@@ -455,10 +488,29 @@ from the start of the run rather than a date, so `start_weekday` places the week
 and it advances at each simulated midnight.
 **`drift`** — slow mean-reverting random walk, the "this week is busier than
 usual" term. `sigma` is the standard deviation of the multiplicative factor and
-`tau_s` its correlation time; bounded by `min_factor` / `max_factor`.
+`tau_s` its correlation time; bounded by `min_factor` / `max_factor`. Keyed on
+simulated time, so a restart does not replay it — see below.
 **`noise`** — the same process on a timescale of seconds.
-**`seed`** — one seed drives both random terms. Drift and noise are off unless
-configured.
+**`seed`** — one seed drives both random terms, through a stream each, so
+adding or removing one does not shift the other's numbers. Drift and noise are
+off unless configured.
+
+The drift has the same restart property as the cloud regime: with a `seed`, the
+drift factor at an instant is a function of **(seed, that instant)**, so a
+process that boots at 13:00 reports the drift the process it replaced would
+have been reporting. It keeps the exact discrete-time Ornstein-Uhlenbeck
+statistics — `sigma` is the standard deviation of the factor and `tau_s` its
+correlation time, both independent of the simulator's step — by sampling on a
+fixed internal lattice of a sixteenth of `tau_s` rather than on the tick.
+
+This needs a top-level `sim_start_utc`, because that is what gives the clock an
+absolute instant to key on. Without one the clock restarts at zero on every
+boot, so the drift restarts with it; the model keys on the run clock, which is
+the most that clock can offer.
+
+The fast `noise` term stays free-running on purpose: zero-mean with a
+correlation time of half a minute, there is nothing in it worth reproducing
+across a restart.
 
 The legacy `external_models.power.base_load_w` still works and is still a flat
 load; a `load` block supersedes it, and a `load` block with no `base_kw`
@@ -665,7 +717,7 @@ docker run \
 pytest
 ```
 
-The test suite covers device physics (BESS, PV, CHP, energy meter), solar geometry and clear-sky irradiance against published reference values, cloud-model statistics, the statistics of the stochastic site load, register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
+The test suite covers device physics (BESS, PV, CHP, energy meter), solar geometry and clear-sky irradiance against published reference values, cloud-model statistics, per-date determinism of the cloud regime and the load drift across restarts, the statistics of the stochastic site load, register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
 
 The built-in solar model is also cross-checked against `pvlib`, which is
 optional, so that suite skips unless you install it:
