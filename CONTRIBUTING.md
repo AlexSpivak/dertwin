@@ -127,22 +127,45 @@ This gives you two linked pseudo-terminals — point the simulator at `/tmp/dert
 For maintainers. The release flow:
 
 ```bash
-# 1. Bump version in pyproject.toml
-# 2. Commit the bump
-git add pyproject.toml
+# 1. Bump the version in pyproject.toml and add the CHANGELOG.md entry
+# 2. Commit both
+git add pyproject.toml CHANGELOG.md
 git commit -m "bump version to 0.x.x"
 
 # 3. Tag and push
 git tag v0.x.x
-git push origin main
+git push origin master
 git push origin v0.x.x
 
-# 4. Build and publish to PyPI
+# 4. Build, from an empty dist/
+rm -rf dist/ build/ dertwin.egg-info/
 python -m build
+
+# 5. Check what you are about to publish
+ls dist/
+twine check dist/*
+
+# 6. Publish to PyPI
 twine upload dist/*
 
-# 5. Create a GitHub release from the tag with a short changelog
+# 7. Create a GitHub release from the tag with a short changelog
 ```
+
+Step 4 clears `dist/` because `twine upload dist/*` uploads *everything* it
+finds there. Left alone, `dist/` still holds the previous release, PyPI rejects
+it with `400 File already exists`, and the version you meant to ship never goes
+up.
+
+Step 5 is the last point where a mistake is free: a PyPI upload cannot be
+replaced, only yanked, so a bad one costs a version number.
+
+Push the tag before the release notes go out — the `[0.x.x]` compare links at
+the bottom of `CHANGELOG.md` 404 until it exists.
+
+`twine upload` asks for a username and password: the username is literally
+`__token__` and the password is the API token. Keep it out of the command line,
+where it would land in shell history — paste it at the prompt, or put it in
+`~/.pypirc` or `TWINE_USERNAME` / `TWINE_PASSWORD`.
 
 ---
 
