@@ -4,6 +4,57 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-11-05
+
+### Added
+
+- **Battery thermal management.** A `thermal` block on a BESS asset puts the
+  pack in a container whose HVAC holds the cell inside
+  `[heat_setpoint_c, cool_setpoint_c]` (15 °C and 30 °C by default). Inside the
+  band the cell relaxes toward ambient with an explicit time constant,
+  `thermal.time_constant_s`, which defaults to the pack's own `C_th / G` —
+  2500 s with the auto-scaled thermal defaults, whatever the pack size. It is
+  never allowed to leave the band, so a site whose ambient spends the winter in
+  the cold derate keeps full nameplate capability instead of `0.8×`. Managed
+  packs also exchange heat with ambient in *both* directions: an unmanaged cell
+  is floored at ambient and so can never be below it, while a heated one can,
+  and has to be let back down when ambient climbs.
+
+- **Optional HVAC auxiliary draw.** `thermal.aux_power_kw` is the container's
+  own consumption while heating or cooling is active, `0` by default. It is
+  published as `hvac_power_kw` on the BESS and enters `SitePowerModel` through
+  a new `aux_load_supplier`, on the **load** side of the balance exactly as the
+  site load is — so it reaches grid power, the import counter and the meter,
+  and is never netted off the BESS `active_power`. A discharging managed pack
+  still reports what its inverter delivered.
+
+- **Configurable temperature derate curve.** `thermal.derate.bands` is a ladder
+  of `[upper bound °C, factor]` pairs with `derate.above_factor` above the last
+  bound. The defaults are the previously hardcoded curve (`≤ 0 → 0.5`,
+  `≤ 10 → 0.8`, `≤ 40 → 1.0`, `≤ 50 → 0.8`, `≤ 60 → 0.5`, above → `0.0`), so
+  no existing configuration moves.
+
+- Config validation for the new block: an inverted setpoint band, a cool
+  setpoint above the 80 °C cell limit, a negative `aux_power_kw`, a
+  non-positive time constant, and a derate ladder whose bounds do not increase
+  or whose factors fall outside `[0, 1]` are all rejected at build time with a
+  message naming the key.
+
+- A golden test that steps a default 0.2.2 battery and one carrying the 0.2.1
+  thermal code verbatim side by side for a simulated day — idle, discharge,
+  charge, idle, under an ambient that sweeps 4–14 °C — comparing applied power,
+  SOC, cell temperature, the capability window and the lifetime counters on
+  every step.
+
+### Unchanged
+
+- **With no `thermal` block, behaviour is identical to 0.2.1.** `managed`
+  defaults to `false`, `aux_power_kw` to `0`, and the derate curve to the one
+  the model already had. Every shipped configuration runs untouched.
+- Cell temperature is still reported in `battery_temperature` and still capped
+  at 80 °C, and ambient still comes from the external temperature model, every
+  tick.
+
 ## [0.2.1] — 2026-11-04
 
 ### Fixed
@@ -79,5 +130,6 @@ All notable changes to this project are documented here. The format follows
 - Two location-aware example site configurations, differing only by
   configuration.
 
+[0.2.2]: https://github.com/AlexSpivak/dertwin/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/AlexSpivak/dertwin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/AlexSpivak/dertwin/releases/tag/v0.2.0

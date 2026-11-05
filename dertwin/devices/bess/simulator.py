@@ -6,6 +6,7 @@ from dertwin.devices.bess.battery import (
     LIMIT_MODE_HARD,
     BatteryLimits,
     BatteryModel,
+    BatteryThermalConfig,
 )
 from dertwin.devices.bess.inverter import InverterModel
 from dertwin.devices.bess.bess import BESSModel
@@ -47,6 +48,7 @@ class BESSSimulator(SimulatedDevice):
             charge_efficiency: Optional[float] = None,
             discharge_efficiency: Optional[float] = None,
             self_discharge_percent_per_day: float = 0.0,
+            thermal: Optional[BatteryThermalConfig] = None,
             state_file: Optional[str] = None,
             state_save_interval_s: float = 60.0,
             asset_id: str = "bess",
@@ -72,6 +74,7 @@ class BESSSimulator(SimulatedDevice):
             charge_efficiency=charge_efficiency,
             discharge_efficiency=discharge_efficiency,
             self_discharge_percent_per_day=self_discharge_percent_per_day,
+            thermal=thermal,
         )
 
         # Optional SOC persistence. Default from config only on first boot.

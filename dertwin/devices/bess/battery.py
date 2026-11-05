@@ -1,6 +1,6 @@
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -8,6 +8,168 @@ logger = logging.getLogger(__name__)
 LIMIT_MODE_HARD = "hard"
 LIMIT_MODE_TAPER = "taper"
 VALID_LIMIT_MODES = (LIMIT_MODE_HARD, LIMIT_MODE_TAPER)
+
+# Temperature capability ladder, as (upper bound °C, factor) in increasing
+# order of temperature: the first band whose bound the cell temperature does
+# not exceed wins. These are the values the curve has always had.
+DEFAULT_DERATE_BANDS = (
+    (0.0, 0.5),
+    (10.0, 0.8),
+    (40.0, 1.0),
+    (50.0, 0.8),
+    (60.0, 0.5),
+)
+DEFAULT_DERATE_ABOVE_FACTOR = 0.0
+
+# Suggested setpoints for a managed container, wide enough to sit inside the
+# full-capability band of the default ladder with margin at both ends.
+DEFAULT_HEAT_SETPOINT_C = 15.0
+DEFAULT_COOL_SETPOINT_C = 30.0
+
+# Hard ceiling on cell temperature, managed or not.
+MAX_CELL_TEMP_C = 80.0
+
+
+@dataclass(frozen=True)
+class TemperatureDerate:
+    """
+    Cell-temperature capability curve.
+
+    `bands` is an increasing ladder of (upper bound °C, factor): the factor of
+    the first band whose bound the temperature does not exceed. `above_factor`
+    applies above the last bound. The defaults are the pre-0.2.2 hardcoded
+    curve, so leaving this alone changes nothing:
+
+        ≤ 0 °C → 0.5,  ≤ 10 → 0.8,  ≤ 40 → 1.0,  ≤ 50 → 0.8,
+        ≤ 60 → 0.5,  above → 0.0
+
+    The factor scales both charge and discharge capability.
+    """
+
+    bands: tuple[tuple[float, float], ...] = DEFAULT_DERATE_BANDS
+    above_factor: float = DEFAULT_DERATE_ABOVE_FACTOR
+
+    def __post_init__(self):
+        if not self.bands:
+            raise ValueError("thermal.derate.bands needs at least one band")
+
+        last_bound = None
+        for bound, factor in self.bands:
+            if last_bound is not None and bound <= last_bound:
+                raise ValueError(
+                    "thermal.derate.bands bounds must increase strictly, got "
+                    f"{bound} after {last_bound}"
+                )
+            if not 0.0 <= factor <= 1.0:
+                raise ValueError(
+                    f"thermal.derate band factor must be in [0, 1], got {factor}"
+                )
+            last_bound = bound
+
+        if not 0.0 <= self.above_factor <= 1.0:
+            raise ValueError(
+                "thermal.derate.above_factor must be in [0, 1], got "
+                f"{self.above_factor}"
+            )
+
+    @classmethod
+    def from_config(cls, config: dict | None) -> "TemperatureDerate":
+        cfg = dict(config or {})
+
+        bands = cfg.get("bands")
+        if bands is None:
+            bands_tuple = DEFAULT_DERATE_BANDS
+        else:
+            bands_tuple = tuple(
+                (float(bound), float(factor)) for bound, factor in bands
+            )
+
+        return cls(
+            bands=bands_tuple,
+            above_factor=float(
+                cfg.get("above_factor", DEFAULT_DERATE_ABOVE_FACTOR)
+            ),
+        )
+
+    def factor_at(self, temperature_c: float) -> float:
+        for bound, factor in self.bands:
+            if temperature_c <= bound:
+                return factor
+        return self.above_factor
+
+
+@dataclass(frozen=True)
+class BatteryThermalConfig:
+    """
+    Cell thermal management, plus the capability curve it defends.
+
+    With `managed=False` — the default — nothing here changes behaviour: the
+    pack follows its own first-order thermal dynamics and the capability curve
+    is the one it has always had.
+
+    With `managed=True` the pack sits in a container whose HVAC holds the cell
+    temperature inside [`heat_setpoint_c`, `cool_setpoint_c`]. Inside the band
+    the cell relaxes toward ambient with time constant `time_constant_s`; it is
+    never allowed to leave the band, so a site whose ambient walks through the
+    cold derate keeps full capability. `aux_power_kw` is the container's own
+    draw while heating or cooling is active, and reaches the meter as site
+    load.
+    """
+
+    managed: bool = False
+    heat_setpoint_c: float = DEFAULT_HEAT_SETPOINT_C
+    cool_setpoint_c: float = DEFAULT_COOL_SETPOINT_C
+    aux_power_kw: float = 0.0
+
+    # None means "the pack's own thermal time constant", C_th / G, which is
+    # 2500 s with the auto-scaled defaults whatever the pack size.
+    time_constant_s: float | None = None
+
+    derate: TemperatureDerate = field(default_factory=TemperatureDerate)
+
+    def __post_init__(self):
+        if self.heat_setpoint_c > self.cool_setpoint_c:
+            raise ValueError(
+                f"thermal.heat_setpoint_c ({self.heat_setpoint_c}) must not "
+                f"exceed thermal.cool_setpoint_c ({self.cool_setpoint_c})"
+            )
+        if self.cool_setpoint_c > MAX_CELL_TEMP_C:
+            raise ValueError(
+                f"thermal.cool_setpoint_c ({self.cool_setpoint_c}) must not "
+                f"exceed the {MAX_CELL_TEMP_C} °C cell limit"
+            )
+        if self.aux_power_kw < 0.0:
+            raise ValueError(
+                f"thermal.aux_power_kw must be non-negative, got {self.aux_power_kw}"
+            )
+        if self.time_constant_s is not None and self.time_constant_s <= 0.0:
+            raise ValueError(
+                "thermal.time_constant_s must be positive, got "
+                f"{self.time_constant_s}"
+            )
+
+    @classmethod
+    def from_config(cls, config: dict | None) -> "BatteryThermalConfig":
+        """Build from the `thermal` block of a BESS asset config."""
+
+        cfg = dict(config or {})
+
+        return cls(
+            managed=bool(cfg.get("managed", False)),
+            heat_setpoint_c=float(
+                cfg.get("heat_setpoint_c", DEFAULT_HEAT_SETPOINT_C)
+            ),
+            cool_setpoint_c=float(
+                cfg.get("cool_setpoint_c", DEFAULT_COOL_SETPOINT_C)
+            ),
+            aux_power_kw=float(cfg.get("aux_power_kw", 0.0)),
+            time_constant_s=(
+                float(cfg["time_constant_s"])
+                if cfg.get("time_constant_s") is not None
+                else None
+            ),
+            derate=TemperatureDerate.from_config(cfg.get("derate")),
+        )
 
 
 @dataclass
@@ -67,6 +229,18 @@ class BatteryModel:
 
     Energy counters are battery-side (what moved in and out of the pack), which
     is what the cycle counter and SOH are defined against.
+
+    Thermal
+    -------
+    One lumped node: Joule heat in, exchange with ambient out, over C_th, with
+    time constant tau = C_th / G. `thermal.derate` turns the resulting cell
+    temperature into a capability factor on both directions.
+
+    With `thermal.managed` the pack sits in a container that holds the cell
+    inside [heat_setpoint_c, cool_setpoint_c], so a cold site keeps full
+    capability, and `thermal.aux_power_kw` is published as `hvac_power_kw` for
+    the site balance to pick up as load. Unmanaged — the default — the cell
+    sits at ambient whenever it is idle, exactly as before.
     """
 
     # Auto-scaling reference: thermal mass and cooling scale linearly with
@@ -100,6 +274,7 @@ class BatteryModel:
         charge_efficiency: float | None = None,
         discharge_efficiency: float | None = None,
         self_discharge_percent_per_day: float = 0.0,
+        thermal: BatteryThermalConfig | None = None,
     ):
         self.capacity_kwh = capacity_kwh
         self.energy_kwh = capacity_kwh * initial_soc / 100.0
@@ -170,7 +345,6 @@ class BatteryModel:
 
         # Thermal
         self.ambient_temp_c = ambient_temp_c
-        self.temperature_c = ambient_temp_c
         self.thermal_capacity_j_per_k = (
             thermal_capacity_j_per_k
             if thermal_capacity_j_per_k is not None
@@ -181,6 +355,16 @@ class BatteryModel:
             if thermal_conductance_w_per_k is not None
             else self._AUTO_SCALE_G_TH_W_PER_K * scale
         )
+
+        self.thermal = thermal or BatteryThermalConfig()
+
+        # A managed pack boots inside its band: an unmanaged one has nowhere to
+        # start but ambient, a managed one is already being held.
+        self.temperature_c = self.hold_in_band(ambient_temp_c)
+
+        # Container HVAC draw, in kW, for whatever the step just did. Zero
+        # unless the container is managed and is actually heating or cooling.
+        self.hvac_power_kw = 0.0
 
         # Lifetime tracking
         self.charge_energy_total_kwh = 0.0
@@ -349,23 +533,13 @@ class BatteryModel:
 
     def _temperature_scale(self) -> float:
         """
-        Simple realistic temperature derating curve.
+        Capability factor for the current cell temperature.
+
+        The ladder lives in `thermal.derate`; its defaults are the curve this
+        model has always had.
         """
 
-        t = self.temperature_c
-
-        if t <= 0:
-            return 0.5
-        elif t <= 10:
-            return 0.8
-        elif t <= 40:
-            return 1.0
-        elif t <= 50:
-            return 0.8
-        elif t <= 60:
-            return 0.5
-        else:
-            return 0.0
+        return self.thermal.derate.factor_at(self.temperature_c)
 
     # -------------------------------------------------
     # Energy Integration
@@ -469,16 +643,97 @@ class BatteryModel:
     # Thermal
     # -------------------------------------------------
 
+    @property
+    def hvac_time_constant_s(self) -> float:
+        """
+        Time constant of the managed cell's relaxation toward ambient.
+
+        Explicit when configured, otherwise the pack's own thermal time
+        constant tau = C_th / G — 2500 s with the auto-scaled defaults, for any
+        pack size.
+        """
+
+        if self.thermal.time_constant_s is not None:
+            return self.thermal.time_constant_s
+
+        if self.thermal_conductance_w_per_k <= 0.0:
+            return float("inf")
+
+        return self.thermal_capacity_j_per_k / self.thermal_conductance_w_per_k
+
+    def hold_in_band(self, temperature_c: float) -> float:
+        """Clamp into the setpoint band. Identity on an unmanaged pack."""
+
+        if not self.thermal.managed:
+            return temperature_c
+
+        return min(
+            self.thermal.cool_setpoint_c,
+            max(self.thermal.heat_setpoint_c, temperature_c),
+        )
+
     def update_temperature(self, power_kw: float, dt: float):
         voc = self.open_circuit_voltage()
         current = (power_kw * 1000.0 / voc) if voc else 0.0
         joule = current * current * self.internal_resistance * dt
+
+        if self.thermal.managed:
+            self._update_temperature_managed(joule, dt)
+            return
+
         Tdiff = max(0.0, self.temperature_c - self.ambient_temp_c)
         cooling = self.thermal_conductance_w_per_k * Tdiff * dt
 
         delta_T = (joule - cooling) / self.thermal_capacity_j_per_k
         self.temperature_c += delta_T
-        self.temperature_c = max(self.ambient_temp_c, min(80.0, self.temperature_c))
+        self.temperature_c = max(
+            self.ambient_temp_c, min(MAX_CELL_TEMP_C, self.temperature_c)
+        )
+        self.hvac_power_kw = 0.0
+
+    def _update_temperature_managed(self, joule_j: float, dt: float) -> None:
+        """
+        Cell temperature inside a managed container.
+
+        Two differences from the unmanaged pack, both of them the point of the
+        feature:
+
+        - the exchange with ambient is signed, so the cell relaxes toward
+          ambient in both directions rather than only cooling toward it. An
+          unmanaged cell is floored at ambient and so can never be below it;
+          a heated one can, and must be pulled back up when ambient rises.
+        - the result cannot leave [heat_setpoint_c, cool_setpoint_c]. The HVAC
+          is ideal within that band: it supplies or removes exactly the heat
+          needed to hold the nearest edge, and `aux_power_kw` is drawn for as
+          long as it is doing so.
+
+        Relaxation uses `hvac_time_constant_s`: the conductance is backed out
+        of it as G = C_th / tau, so configuring the time constant configures
+        the dynamics directly.
+        """
+
+        tau_s = self.hvac_time_constant_s
+        conductance = (
+            self.thermal_capacity_j_per_k / tau_s if tau_s != float("inf") else 0.0
+        )
+
+        exchange = conductance * (self.temperature_c - self.ambient_temp_c) * dt
+        free_temp_c = (
+            self.temperature_c
+            + (joule_j - exchange) / self.thermal_capacity_j_per_k
+        )
+
+        held_temp_c = min(
+            self.thermal.cool_setpoint_c,
+            max(self.thermal.heat_setpoint_c, free_temp_c),
+        )
+
+        # The HVAC is active exactly when the band is what stopped the cell
+        # from going where its own dynamics were taking it.
+        active = abs(held_temp_c - free_temp_c) > 1e-12
+        self.hvac_power_kw = self.thermal.aux_power_kw if active else 0.0
+
+        self.temperature_c = min(MAX_CELL_TEMP_C, held_temp_c)
 
     def open_circuit_voltage(self) -> float:
         base_voltage = 700.0
@@ -532,4 +787,9 @@ class BatteryModel:
         )
         self.cycles = float(state.get("cycles", 0.0))
         self.soh = float(state.get("soh", 100.0))
-        self.temperature_c = float(state.get("temperature_c", self.ambient_temp_c))
+        # A managed pack is inside its band even on the first step after a
+        # restore, so capability telemetry never reports a cold derate the
+        # container would not actually allow.
+        self.temperature_c = self.hold_in_band(
+            float(state.get("temperature_c", self.ambient_temp_c))
+        )

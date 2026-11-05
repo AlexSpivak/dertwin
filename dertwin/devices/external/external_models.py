@@ -142,6 +142,12 @@ class ExternalModels:
                 c.get_telemetry().actual_power_kw
                 for c in chp_devices
             ),
+            # Device-owned auxiliary load: a managed BESS container's HVAC
+            # draw, which is site load and not inverter power.
+            aux_load_supplier=lambda: sum(
+                b.get_telemetry().hvac_power_kw
+                for b in bess_devices
+            ),
         )
 
     @classmethod
