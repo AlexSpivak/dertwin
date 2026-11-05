@@ -446,12 +446,62 @@ def test_non_positive_time_constant_is_rejected():
 @pytest.mark.parametrize("derate_cfg", [
     {"bands": []},
     {"bands": [[10.0, 0.5], [5.0, 1.0]]},
+    {"bands": [[10.0, 0.5], [10.0, 1.0]]},
     {"bands": [[10.0, 1.5]]},
+    {"bands": [[10.0, -0.1]]},
     {"bands": [[10.0, 1.0]], "above_factor": -0.1},
+    {"bands": [[10.0, 1.0]], "above_factor": 2.0},
 ])
 def test_unusable_derate_configs_are_rejected(derate_cfg):
     with pytest.raises(ValueError, match="derate"):
         BatteryThermalConfig.from_config({"derate": derate_cfg})
+
+
+@pytest.mark.parametrize("config, message", [
+    (
+        {"managed": True, "heat_setpoint_c": 30.0, "cool_setpoint_c": 20.0},
+        "thermal.heat_setpoint_c (30.0) must not exceed "
+        "thermal.cool_setpoint_c (20.0)",
+    ),
+    (
+        {"derate": {"bands": [[10.0, 0.5], [5.0, 1.0]]}},
+        "thermal.derate.bands bounds must increase strictly, got 5.0 after 10.0",
+    ),
+    (
+        {"derate": {"bands": [[10.0, 1.5]]}},
+        "thermal.derate band factor must be in [0, 1], got 1.5",
+    ),
+    (
+        {"derate": {"bands": [[10.0, -0.1]]}},
+        "thermal.derate band factor must be in [0, 1], got -0.1",
+    ),
+    (
+        {"derate": {"bands": []}},
+        "thermal.derate.bands needs at least one band",
+    ),
+    (
+        {"managed": True, "cool_setpoint_c": 95.0},
+        "thermal.cool_setpoint_c (95.0) must not exceed the 80.0 °C cell limit",
+    ),
+    (
+        {"managed": True, "aux_power_kw": -1.0},
+        "thermal.aux_power_kw must be non-negative, got -1.0",
+    ),
+    (
+        {"managed": True, "time_constant_s": 0.0},
+        "thermal.time_constant_s must be positive, got 0.0",
+    ),
+])
+def test_validation_messages_name_the_offending_key(config, message):
+    """
+    The exact text, not just the exception type: a config error has to say
+    which key to go and look at.
+    """
+
+    with pytest.raises(ValueError) as excinfo:
+        BatteryThermalConfig.from_config(config)
+
+    assert str(excinfo.value) == message
 
 
 def test_thermal_is_an_accepted_asset_key():
@@ -528,6 +578,12 @@ async def test_hvac_aux_draw_appears_in_the_meter():
         BASE_LOAD_KW + 1.5
     )
     assert site.external_models.power_model.import_energy_kwh > 0.0
+
+    # Accounted at the PCC only: the site load model is what it always was, so
+    # the draw is not double-counted as load on the way there.
+    assert site.external_models.load_model.get_power_kw() == pytest.approx(
+        BASE_LOAD_KW
+    )
 
 
 @pytest.mark.asyncio

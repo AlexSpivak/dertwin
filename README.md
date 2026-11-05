@@ -340,6 +340,12 @@ An **unmanaged** pack sits at ambient whenever it is idle, so a site that spends
 the winter between 4 °C and 14 °C spends it at `0.8×` nameplate. A **managed**
 pack sits in a container whose HVAC holds it inside a setpoint band:
 
+> **In one line:** the HVAC auxiliary draw is accounted **only at the PCC** — in
+> `grid_power_kw`, the import/export counters and the energy meter — and **not**
+> in the site load model or any load-meter telemetry; and a pack that starts
+> outside the band **snaps to the nearest edge on its first step**, it does not
+> ramp in.
+
 ```json
 {
   "type": "bess",
