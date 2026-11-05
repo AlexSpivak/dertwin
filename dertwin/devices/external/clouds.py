@@ -25,6 +25,12 @@ from abc import ABC, abstractmethod
 from datetime import date, datetime
 from typing import Optional
 
+from dertwin.devices.external.series_feed import (
+    DecayingOffset,
+    SeriesFeed,
+    SourceSwitch,
+)
+
 from dertwin.devices.external.stochastic import (
     KeyedAR1,
     OrnsteinUhlenbeck,
@@ -64,6 +70,15 @@ class CloudModel(ABC):
     @abstractmethod
     def clear_sky_index(self) -> float:
         ...
+
+    def seed_from_kt(self, kt: float) -> None:
+        """
+        Ask the model to report `kt` next, if it can.
+
+        Called when a measured series hands the sky over to the model, so the
+        handover is continuous. A model with no state to place — a fixed clear
+        sky, a replayed series — has nothing to do here.
+        """
 
 
 class ClearSkyCloudModel(CloudModel):
@@ -202,6 +217,21 @@ class AR1CloudModel(CloudModel):
     def clear_sky_index(self) -> float:
         return max(self.kt_min, min(1.0, self._kt_day + self._intraday.value))
 
+    def seed_from_kt(self, kt: float) -> None:
+        """
+        Place the intraday perturbation so the next index reported is `kt`.
+
+        kt is kt_day + x, and kt_day is this date's regime, which a handover
+        has no business moving: a measurement that happens to end on a bright
+        minute must not turn the whole day clear. So the whole difference goes
+        into x, the perturbation, which is the part of the model that is meant
+        to carry minute-to-minute weather and which mean-reverts at
+        `intraday_tau_s`. The result is a switch with no step in it, followed
+        by a decay back to the day's regime at the model's own rate.
+        """
+
+        self._intraday.set_value(kt - self._kt_day)
+
     @property
     def daily_clear_sky_index(self) -> float:
         """Today's regime, before the intraday perturbation."""
@@ -210,18 +240,102 @@ class AR1CloudModel(CloudModel):
 
 class SeriesCloudModel(CloudModel):
     """
-    Clear-sky index replayed from a CSV, for driving the sky from recorded
-    cloud cover. Instants outside the series fall back to clear sky.
+    Clear-sky index replayed from a CSV feed.
+
+    With no `fallback` this is the original one-shot model, down to the
+    detail that an instant outside the series reports clear sky — the sky the
+    clear-sky curve alone would give. That is the wrong answer for anything
+    live, which is why a feed that can go stale is given a fallback: when the
+    feed has nothing for the instant, the stochastic model takes over, and
+    neither the dark sky nor the cloudless one is ever reported for want of
+    data.
+
+    The handover is continuous in both directions, and by the same rule — the
+    last index reported is carried across the switch and relaxed away at the
+    cloud model's own correlation time:
+
+    - into the fallback, by seeding its intraday perturbation, which already
+      decays at exactly that rate;
+    - back to the series, by an explicit offset with the same time constant,
+      because the series is data and cannot be seeded.
+
+    So a switch in either direction is a step of zero, and every step after it
+    is one the stochastic model could have produced on its own.
     """
 
-    def __init__(self, series, kt_min: float = 0.0):
+    def __init__(
+        self,
+        series=None,
+        kt_min: float = 0.0,
+        feed=None,
+        fallback: Optional[CloudModel] = None,
+        handover_tau_s: float = 0.0,
+    ):
+        if feed is None:
+            if series is None:
+                raise ValueError("SeriesCloudModel needs either a series or a feed")
+
+            from dertwin.devices.external.timeseries import SeriesTable
+
+            feed = SeriesFeed.from_table(
+                SeriesTable(
+                    columns={"kt": series}, primary="kt",
+                    rows=len(series), skipped_rows=0,
+                )
+            )
+
+        self.feed = feed
         self.series = series
         self.kt_min = kt_min
+        self.fallback = fallback
+        self.switch = SourceSwitch(feed.name)
+        self.handover = DecayingOffset(handover_tau_s)
+
         self._kt = 1.0
 
+    # --------------------------------------------------
+
+    def _clamp(self, kt: float) -> float:
+        return max(self.kt_min, min(1.0, kt))
+
     def advance(self, utc_time: datetime, dt: float) -> None:
-        value = self.series.value_at(utc_time)
-        self._kt = 1.0 if value is None else max(self.kt_min, min(1.0, float(value)))
+        self.feed.refresh(utc_time)
+
+        sample = self.feed.sample(utc_time)
+
+        if self.fallback is None:
+            # One-shot, no fallback configured: unchanged since 0.2.2, clear
+            # sky outside the series included.
+            self._kt = (
+                1.0 if sample is None
+                else self._clamp(sample[self.feed.primary])
+            )
+            return
+
+        if sample is None:
+            if self.switch.to_fallback(
+                utc_time,
+                "no data" if not self.feed.has_data else "past the last row",
+            ):
+                if self.handover.tau_s > 0.0:
+                    self.fallback.seed_from_kt(self._kt)
+                self.handover.clear()
+
+            self.fallback.advance(utc_time, dt)
+            self._kt = self._clamp(self.fallback.clear_sky_index())
+            return
+
+        measured = self._clamp(sample[self.feed.primary])
+
+        if self.switch.to_series(utc_time):
+            self.handover.start(self._kt - measured, utc_time)
+
+        # The fallback keeps running while the series drives, so the index it
+        # would report is always a current one rather than one frozen at the
+        # last switch.
+        self.fallback.advance(utc_time, dt)
+
+        self._kt = self._clamp(measured + self.handover.value(utc_time))
 
     def clear_sky_index(self) -> float:
         return self._kt

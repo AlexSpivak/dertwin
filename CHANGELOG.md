@@ -4,6 +4,94 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] — 2026-11-05
+
+### Added
+
+- **A live irradiance series.** `irradiance.series_refresh_s` turns
+  `series_csv` from a file read once at build time into a live input: dertwin
+  re-reads it on that interval of simulated time, so an external fetcher — an
+  Open-Meteo sidecar, a plant's historian, anything that can write a CSV — can
+  drive the simulated sky from real weather. Only the file is re-read; nothing
+  else in the config is. The re-read costs one `stat` per interval unless the
+  file has actually moved, and a snapshot whose file changed while it was being
+  read is thrown away and retried, so a writer that appends in place cannot
+  feed the simulation half of two versions. The documented contract asks for a
+  temporary file and an atomic `rename`, under which a torn read cannot happen
+  at all.
+
+- **A stochastic fallback when the series goes stale.**
+  `irradiance.series_stale_after_s` is how long the last row keeps being served
+  once simulated time has passed it — an hour by default in live mode, because
+  a fetcher writing hourly rows is always a little behind. Past that, or with a
+  file that is missing or unreadable, the **stochastic cloud model** takes over.
+  Not a dark sky and not a cloudless one: a dark sky tells an EMS the plant has
+  failed and a cloudless one tells it the plant is at nameplate, while the
+  stochastic model tells it the weather is ordinary, which is the only honest
+  answer when the measurement is gone. A file that is not there at startup is
+  now a warning rather than a failure to start, and is picked up when it
+  appears. Each transition is one log line, in both directions.
+
+- **A handover with no step in it.** What crosses a switch is the clear-sky
+  index, not W/m², and it is carried by one rule in both directions: the last
+  index reported is held and relaxed away at the cloud model's own
+  `intraday_tau_s`. Into the fallback that is exact and needs no new
+  machinery — the AR(1) model's intraday perturbation is seeded with the
+  difference from the day's regime, which is the part of the model that already
+  decays at that rate, and the day's regime is deliberately left alone so a
+  measurement ending on a bright minute cannot turn the whole day clear. Coming
+  back, an explicit offset with the same time constant decays onto the
+  measurement. The switch tick is a step of zero either way, and every step
+  after it is one the stochastic model could have produced itself.
+  `series_handover_tau_s: 0` turns it off and makes each switch a plain jump.
+  Because the index is what carries over, the beam/diffuse split is taken from
+  the GHI being reported and not from the file's: Erbs is strongly non-linear
+  in the clear-sky index, so splitting the file's GHI and scaling the
+  components afterwards would hold GHI continuous while stepping plane-of-array
+  irradiance, and so PV power, at the switch. Measured `dni_w_m2` / `dhi_w_m2`
+  are believed instead and scaled with GHI, which keeps the file's beam
+  fraction and its closure.
+
+- **Optional measured beam and diffuse columns.** `dni_w_m2` and `dhi_w_m2`
+  (names configurable) are used when the header carries them. Both given are
+  taken as they stand and are *not* adjusted to close with GHI — measured
+  triples rarely close, and quietly fixing one of three measured numbers would
+  hide a data problem. One given derives the other from GHI; neither falls back
+  to the Erbs split, as before.
+
+- **`irradiance.series_max_gap_s`.** A gap inside the series wider than this is
+  missing data — and so falls back — rather than something to draw a straight
+  line across. `0`, the default, bridges any gap, which is what interpolation
+  has always done.
+
+- **Defined behaviour for awkward rows.** Duplicate timestamps resolve to the
+  last row in the file, so a correction appended later overrides the row it
+  corrects. Out-of-order rows are sorted on read. A blank cell is a row that
+  column does not have, so a half-filled DNI column still leaves a complete
+  GHI series. In live mode an unparseable timestamp or value is counted, logged
+  and skipped: one torn line cannot take the simulation with it. A file missing
+  its header or its driving column is unusable, and the previous snapshot is
+  kept rather than discarded.
+
+### Unchanged
+
+- **With none of the new keys, behaviour is identical to 0.2.2.**
+  `series_refresh_s` defaults to `0`, which is the one-shot read the key has
+  always had, and with no staleness configured no fallback model is constructed
+  at all — so nothing draws from the random streams and nothing can reach the
+  output but the file. A missing or malformed file in one-shot mode is still an
+  error at build time, and an instant outside the series is still dark for a
+  GHI series and clear sky for a `kt` one. Every shipped configuration runs
+  untouched.
+
+### Not in this release
+
+- **Ambient temperature from the series.** The columns would be easy; the model
+  behind them is not. Site ambient feeds the BESS thermal model added in 0.2.2,
+  whose HVAC has no hysteresis, so a temperature that steps on every re-read
+  would chatter the heater and the cooler against each other. Worth doing after
+  the thermal model has a deadband.
+
 ## [0.2.2] — 2026-11-05
 
 ### Added
@@ -130,6 +218,7 @@ All notable changes to this project are documented here. The format follows
 - Two location-aware example site configurations, differing only by
   configuration.
 
+[0.2.3]: https://github.com/AlexSpivak/dertwin/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/AlexSpivak/dertwin/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/AlexSpivak/dertwin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/AlexSpivak/dertwin/releases/tag/v0.2.0

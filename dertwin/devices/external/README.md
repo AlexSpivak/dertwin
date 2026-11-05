@@ -17,6 +17,7 @@ All models are designed to be **deterministic**, fully **simulation-time driven*
   - [load.py](#loadpy)
   - [stochastic.py](#stochasticpy)
   - [timeseries.py](#timeseriespy)
+  - [series_feed.py](#series_feedpy)
   - [grid_frequency.py](#grid_frequencypy)
   - [grid_voltage.py](#grid_voltagepy)
   - [power_flow.py](#power_flowpy)
@@ -148,6 +149,14 @@ cloudless sky.
 `model: "markov"` (a 3-state regime chain) is reserved and currently raises
 `NotImplementedError`.
 
+`SeriesCloudModel` replays `kt` from a feed. Given a `fallback` — which the
+factory supplies whenever the feed can go stale — it hands the sky to the
+stochastic model when the feed has nothing for the instant, rather than
+reporting the cloudless sky a missing row used to mean. `seed_from_kt` is how
+the handover is made continuous: it places the intraday perturbation `x` so
+the next index reported is the last one measured, leaving `kt_day` alone, so a
+measurement that ends on a bright minute cannot turn the whole day clear.
+
 ### `irradiance.py`
 
 **Classes:** `IrradianceModel`, `ClearSkyIrradianceModel`,
@@ -159,7 +168,7 @@ Three models, selected by `irradiance.model`:
 |---|---|
 | `"sinusoidal"` | The original fixed-shape day: a sine between a configured sunrise and sunset, identical every day of the year everywhere on earth. **The default**, so existing configs are untouched. |
 | `"clearsky"` | Real solar geometry for the date and location × a cloud index. Selected automatically when `latitude` is given. |
-| `"series"` | GHI replayed from a CSV. |
+| `"series"` | GHI replayed from a CSV, optionally re-read live, with the stochastic cloud model taking over when it goes stale. |
 
 All three publish `IrradianceComponents` — GHI, DNI, DHI and the sun's
 position. Plane-of-array transposition is deliberately **not** done here: one
@@ -175,6 +184,18 @@ warning.
 A `clearsky` or `series` model needs a date, so it requires a top-level
 `sim_start_utc` and raises without one — otherwise it would silently simulate
 January 1970.
+
+`SeriesIrradianceModel` reads its CSV through a `SeriesFeed`. With no
+`fallback` it is the one-shot replay it has always been, dark outside the
+series included. With one — supplied by the factory whenever the feed can go
+stale — it holds a full `ClearSkyIrradianceModel` and delegates to it while the
+series has nothing to give, so the fallback sky is indistinguishable from a run
+that never had a series. The switch is made continuous in clear-sky-index
+space, not in W/m²: what carries over a handover is how cloudy it is, not the
+irradiance a particular sun elevation happened to deliver. Optional
+`dni_w_m2` / `dhi_w_m2` columns are believed when the file has them;
+`resolve_beam_split` derives whichever is missing and falls back to Erbs when
+neither is there.
 
 **Key methods:**
 ```python
@@ -326,12 +347,61 @@ another's numbers. With `seed=None` it is random, so an unseeded run stays
 random per run.
 ### `timeseries.py`
 
-**Class:** `TimeSeries`
+**Classes:** `TimeSeries`, `SeriesTable`; reader `read_series_table`
 
 CSV time series for driving an external model from recorded data. Linear or
 step interpolation, timestamps parsed as ISO 8601 (bare, `Z`, or an offset),
 rows may be unsorted. `value_at` returns `None` outside the covered range —
 one warning, then each caller decides what that means (zero for irradiance).
+
+Duplicate timestamps resolve to the **last row in the file**: the sort is
+stable and `value_at` reads the last of a run of duplicates, so a correction
+appended later overrides the row it corrects. `max_gap_s` makes a gap wider
+than it missing data rather than something to draw a straight line across;
+`0`, the default, bridges any gap.
+
+`SeriesTable` is several named columns over one time axis from a single read,
+with a `primary` column a caller cannot do without — an instant with no
+primary value has no sample at all. Each column is built from the rows where
+its own cell held a number, so a half-filled DNI column still leaves a
+complete GHI series. `read_series_table` takes `skip_bad_rows`, which relaxes
+*rows* only: an unparseable timestamp or value is counted and dropped, while a
+file missing its header or its driving column is still an error, because a
+file in the wrong shape is no more usable for being readable.
+
+### `series_feed.py`
+
+**Classes:** `SeriesFeed`, `SourceSwitch`, `DecayingOffset`
+
+The thing between a CSV on disk and a model that wants a value for an instant.
+`SeriesFeed` does both jobs: a one-shot read at build time — the default, and
+a bad file there is still a configuration error — or, with a positive
+`refresh_s`, ownership of the path. In live mode it re-reads on an interval,
+notices an external fetcher replacing the file, holds the last row for
+`stale_after_s` once simulated time has passed it, and returns `None` when it
+has nothing usable. A missing file at startup is then a warning rather than a
+failure to start, because the whole point of the fallback is that a run
+survives its fetcher not being up yet.
+
+The re-read costs one `stat` per interval unless the signature —
+`(mtime_ns, size, inode, device)` — has moved; the inode is in it because an
+atomic replacement may well land on the same size and mtime resolution. The
+file is stat'ed again after the read and a snapshot that moved underneath it is
+dropped and retried, so a writer that appends in place cannot feed the
+simulation half of two versions. A writer using a temporary file and `rename`,
+which is what the file contract asks for, cannot produce a torn read at all.
+
+Everything is keyed on simulated UTC instants rather than wall-clock seconds,
+for the same reason the cloud regime is: a run that is not in real time, or one
+replayed from the same config, has to behave the same way twice.
+
+`SourceSwitch` holds which source a model is reporting from and logs one line
+per change, in both directions — a run that never loses its feed says nothing
+at all, and one that flaps says exactly when and how often. `DecayingOffset`
+is the other half of the handover: an offset that relaxes to zero with a time
+constant, used in the direction where the model cannot simply be seeded
+(coming back to the series, which is data). `tau_s` of `0` disables it and
+makes the switch a plain jump.
 
 ### `grid_frequency.py`
 
