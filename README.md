@@ -583,6 +583,13 @@ So an external fetcher knows exactly what to write:
 - **Growing the file is the normal case.** Rewrite it whole with the new rows
   appended, or keep a rolling window; either works, and only the rows covering
   the simulated instant matter.
+- **Backfill is allowed and is never replayed.** A fetcher that comes back up
+  may write the outage it missed along with fresh data; rows older than the
+  simulated instant are not re-run, because the clock does not rewind. Only
+  the pair of rows bracketing the current instant can reach the output, so
+  backfilled history serves as the lower bracket and nothing more. Rows in the
+  future are fine too, and are used as the upper bracket — a forecast ahead of
+  "now" costs nothing.
 - **A malformed row is skipped, not fatal.** In live mode an unparseable
   timestamp or value is counted, logged and dropped, so one torn line cannot
   take the simulation with it. A file missing its header or its driving column
@@ -646,6 +653,17 @@ is one the stochastic model could have produced on its own. A short blend over
 an arbitrary window would have done the same job for the eye, but it would
 have reported a sky neither source produced and added a timescale the
 simulation does not otherwise have.
+
+The index is what carries over, so the beam/diffuse split has to be taken from
+the GHI actually being reported rather than from the file's. The Erbs
+correlation is strongly non-linear in the clear-sky index — a kt of 0.5 is
+about 93% diffuse where a kt of 0.85 is about 58% — so splitting the file's
+GHI and scaling the components afterwards would leave GHI continuous while
+handing a tilted array the diffuse fraction of a much cloudier sky, and that
+shows up as a step in plane-of-array irradiance and so in PV power. A file
+that carries measured `dni_w_m2` / `dhi_w_m2` is a different matter: those are
+believed, so they are scaled with GHI, which keeps the measured beam fraction
+and whatever closure the file had.
 
 Everything here — the refresh interval, the grace period, the handover — is
 measured in **simulated** time, for the same reason the cloud regime is: a run

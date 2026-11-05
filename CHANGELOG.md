@@ -44,6 +44,13 @@ All notable changes to this project are documented here. The format follows
   measurement. The switch tick is a step of zero either way, and every step
   after it is one the stochastic model could have produced itself.
   `series_handover_tau_s: 0` turns it off and makes each switch a plain jump.
+  Because the index is what carries over, the beam/diffuse split is taken from
+  the GHI being reported and not from the file's: Erbs is strongly non-linear
+  in the clear-sky index, so splitting the file's GHI and scaling the
+  components afterwards would hold GHI continuous while stepping plane-of-array
+  irradiance, and so PV power, at the switch. Measured `dni_w_m2` / `dhi_w_m2`
+  are believed instead and scaled with GHI, which keeps the file's beam
+  fraction and its closure.
 
 - **Optional measured beam and diffuse columns.** `dni_w_m2` and `dhi_w_m2`
   (names configurable) are used when the header carries them. Both given are

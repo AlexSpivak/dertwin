@@ -496,18 +496,32 @@ class SeriesIrradianceModel(IrradianceModelBase):
         if offset and measured_kt is not None and measured_kt > 0.0:
             scale = max(0.0, measured_kt + offset) / measured_kt
 
-        if not position.is_up or ghi * scale <= 0.0:
+        served = ghi * scale
+
+        if not position.is_up or served <= 0.0:
             self._components = IrradianceComponents.dark(position)
             if measured_kt is not None:
                 self._last_kt = measured_kt * scale
             return
 
-        dni, dhi = resolve_beam_split(ghi, position, utc_time, dni, dhi)
+        if dni is None and dhi is None:
+            # The Erbs split has to be taken from the GHI actually being
+            # reported, not from the file's. Erbs is strongly non-linear in
+            # the clear-sky index — a kt of 0.5 is ~93% diffuse and a kt of
+            # 0.85 ~58% — so splitting the file's GHI and scaling the
+            # components afterwards would hand a tilted array the diffuse
+            # fraction of a cloudier sky than the one it is being told about.
+            # GHI would still be continuous across a handover while plane-of-
+            # array irradiance, and so PV power, stepped.
+            dni, dhi = resolve_beam_split(served, position, utc_time)
+        else:
+            # Measured components: one scale for all three keeps both the
+            # file's beam/diffuse ratio and whatever closure it had.
+            dni, dhi = resolve_beam_split(ghi, position, utc_time, dni, dhi)
+            dni, dhi = dni * scale, dhi * scale
 
-        # One scale for all three keeps whatever closure the file had.
         self._components = self._build(
-            ghi * scale, dni * scale, dhi * scale,
-            position, utc_time, clear_sky=clear_sky,
+            served, dni, dhi, position, utc_time, clear_sky=clear_sky,
         )
         self._last_kt = (
             self._components.ghi / clear_sky

@@ -610,3 +610,221 @@ def test_bad_feed_settings_are_rejected(tmp_path, kwargs, match):
 def test_a_feed_needs_a_path_or_a_table():
     with pytest.raises(ValueError, match="either a path or a table"):
         SeriesFeed(None, primary="ghi_w_m2")
+
+
+# ------------------------------------------------------------
+# The handover has to be continuous in what a PV array sees,
+# not only in GHI
+# ------------------------------------------------------------
+
+def poa(components, tilt_deg=45.0, azimuth_deg=180.0):
+    """Plane-of-array irradiance for a steep south-facing array."""
+
+    from dertwin.devices.external import solar
+
+    return solar.plane_of_array_irradiance(
+        components, tilt_deg=tilt_deg, azimuth_deg=azimuth_deg, albedo=0.2
+    )
+
+
+def returning_model(tmp_path, handover_tau_s=900.0, **overrides):
+    """
+    A model that goes stale and is then handed a file covering the present
+    again — the return switch, with the handover still decaying.
+    """
+
+    model, path = live_model(
+        tmp_path, rows(6, 8, value=140.0),
+        series_handover_tau_s=handover_tau_s, **overrides,
+    )
+
+    # Out to the fallback first.
+    list(walk(model, utc(10), utc(11)))
+    assert model.switch.on_fallback
+
+    publish(path, rows(6, 20, value=140.0))
+
+    return model, path
+
+
+def test_the_handover_splits_the_irradiance_it_reports(tmp_path):
+    """
+    Erbs is strongly non-linear in the clear-sky index, so the split has to be
+    taken from the GHI being reported. Splitting the file's GHI and scaling
+    the components afterwards gives a sky whose GHI is right and whose diffuse
+    fraction belongs to a much cloudier one.
+    """
+
+    from dertwin.devices.external import solar
+
+    model, _ = returning_model(tmp_path)
+
+    list(walk(model, utc(12), utc(12, 1)))
+
+    assert not model.switch.on_fallback
+    assert model.handover.active
+
+    components = model.get_components()
+    expected_dni, expected_dhi = solar.erbs_split(
+        components.ghi, components.position, model.last_utc_time
+    )
+
+    assert components.dni == pytest.approx(expected_dni, rel=1e-9)
+    assert components.dhi == pytest.approx(expected_dhi, rel=1e-9)
+
+    # And the file's own GHI is well below what is being reported, so this is
+    # a real handover and not a trivially satisfied assertion.
+    raw = model.feed.sample(model.last_utc_time)[model.feed.primary]
+    assert components.ghi > raw * 1.2
+
+
+def low_sun_return(tmp_path, handover_tau_s, path_name="ghi.csv"):
+    """
+    A return switch with the sun low.
+
+    Low sun is where a mis-ordered handover does its damage: a steep array is
+    then dominated by beam, and the beam fraction is the part of the split
+    that moves most with the clear-sky index — at 14 degrees of elevation the
+    diffuse fraction runs 0.94 at kt 0.5 and 0.61 at kt 0.85.
+    """
+
+    model, path = live_model(
+        tmp_path, rows(4, 5, value=100.0),
+        path_name=path_name, series_handover_tau_s=handover_tau_s,
+    )
+
+    samples = []
+
+    for when, _ in walk(model, utc(5), utc(7)):
+        samples.append((when, model.get_components(),
+                        model.switch.on_fallback))
+
+        if when == utc(6):
+            publish(path, rows(4, 12, value=100.0))
+
+    out_at = next(i for i, s in enumerate(samples) if s[2])
+    back_at = next(i for i, s in enumerate(samples) if i > out_at and not s[2])
+
+    return samples, out_at, back_at
+
+
+def test_the_return_switch_does_not_step_the_plane_of_array(tmp_path):
+    """
+    The gate property, at the quantity a PV array actually integrates: the
+    return tick must move POA no further than the stochastic model moves it on
+    a tick of its own.
+    """
+
+    samples, out_at, back_at = low_sun_return(tmp_path, 900.0)
+
+    at_return = abs(poa(samples[back_at][1]) - poa(samples[back_at - 1][1]))
+    stochastic = samples[out_at:back_at]
+    inside = max(
+        (abs(poa(b[1]) - poa(a[1])) for a, b in zip(stochastic, stochastic[1:])),
+        default=0.0,
+    )
+
+    assert inside > 0.0
+    assert at_return <= inside
+
+    # And in absolute terms: GHI moves well under a percent per tick here, so
+    # POA has to as well. Comparing against the stochastic segment alone is
+    # too loose a bound when the clear-sky curve is climbing fast.
+    before = poa(samples[back_at - 1][1])
+    assert at_return <= 0.02 * before
+
+
+def test_the_return_switch_does_not_step_the_diffuse_fraction(tmp_path):
+    """
+    The invariant underneath the POA assertion, and free of any array
+    geometry: the sky handed over at the switch has to be the same *kind* of
+    sky, not merely one with the same GHI.
+    """
+
+    samples, _, back_at = low_sun_return(tmp_path, 900.0)
+
+    def diffuse_fraction(components):
+        return components.dhi / components.ghi
+
+    before = diffuse_fraction(samples[back_at - 1][1])
+    after = diffuse_fraction(samples[back_at][1])
+
+    assert before == pytest.approx(after, abs=0.01)
+
+
+def test_disabling_the_handover_steps_the_plane_of_array(tmp_path):
+    """The contrast: without the handover the return is a plain jump."""
+
+    def step_across(handover_tau_s, path_name):
+        samples, _, back_at = low_sun_return(
+            tmp_path, handover_tau_s, path_name=path_name
+        )
+        return abs(poa(samples[back_at][1]) - poa(samples[back_at - 1][1]))
+
+    assert step_across(900.0, "ghi.csv") < step_across(0.0, "plain.csv")
+
+
+def test_measured_components_keep_their_ratio_through_a_handover(tmp_path):
+    """
+    A file that carries DNI and DHI is believed, so those are scaled with GHI
+    rather than re-split: the handover must not quietly replace a measured
+    beam fraction with a modelled one.
+    """
+
+    body = (
+        "timestamp,ghi_w_m2,dni_w_m2,dhi_w_m2\n"
+        "2025-06-21T06:00:00Z,140,200,80\n"
+        "2025-06-21T08:00:00Z,140,200,80\n"
+    )
+    model, path = live_model(tmp_path, body, series_handover_tau_s=900.0)
+
+    list(walk(model, utc(10), utc(11)))
+    assert model.switch.on_fallback
+
+    publish(path, (
+        "timestamp,ghi_w_m2,dni_w_m2,dhi_w_m2\n"
+        "2025-06-21T06:00:00Z,140,200,80\n"
+        "2025-06-21T20:00:00Z,140,200,80\n"
+    ))
+
+    list(walk(model, utc(12), utc(12, 1)))
+
+    assert not model.switch.on_fallback
+    assert model.handover.active
+
+    components = model.get_components()
+
+    # 200/80 in the file; the beam cap may move it, so only an untouched beam
+    # is held to the ratio exactly.
+    assert components.dni / components.dhi == pytest.approx(200.0 / 80.0)
+    assert components.ghi > 140.0 * 1.2
+
+
+def test_backfilled_rows_older_than_now_are_not_replayed(tmp_path):
+    """
+    The README contract says only the rows bracketing the simulated instant
+    matter. A file replaced with a backfill of the outage must therefore leave
+    no trace of those older rows in the output: the clock does not rewind.
+    """
+
+    model, path = live_model(
+        tmp_path, rows(6, 8, value=140.0), series_handover_tau_s=0.0
+    )
+
+    list(walk(model, utc(10), utc(11)))
+    assert model.switch.on_fallback
+
+    # Rows covering the outage carry a value the run must never report.
+    sentinel = 999.0
+    body = ["timestamp,ghi_w_m2"]
+    for hour in range(6, 21):
+        value = sentinel if hour < 12 else 140.0
+        body.append(f"{utc(hour).isoformat().replace('+00:00', 'Z')},{value}")
+    publish(path, "\n".join(body) + "\n")
+
+    reported = [ghi for _, ghi in walk(model, utc(12), utc(14))]
+
+    assert not model.switch.on_fallback
+    assert reported
+    assert all(ghi == pytest.approx(140.0) for ghi in reported)
+    assert max(reported) < sentinel
