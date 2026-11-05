@@ -70,6 +70,20 @@ class OrnsteinUhlenbeck:
     def value(self) -> float:
         return self._value
 
+    def set_value(self, value: float) -> None:
+        """
+        Place the process at `value`.
+
+        For handing a signal over from a measurement to the model: starting
+        the perturbation at the offset the measurement last showed makes the
+        handover itself a step of zero, and the process then relaxes that
+        offset away at its own `tau_s` rather than at some rate chosen for
+        the occasion. Mean reversion does the rest, so nothing permanent is
+        injected however far from zero it is placed.
+        """
+
+        self._value = float(value)
+
     def advance(self, dt: float) -> float:
         # Skipping the draw, rather than scaling it to zero, keeps the random
         # stream independent of how many steps a disabled process took.

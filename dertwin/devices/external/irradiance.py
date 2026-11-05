@@ -9,7 +9,9 @@ Three of them, selected by `irradiance.model` in the config:
 - "clearsky"   — real solar geometry for a date and location, so sunrise,
   sunset and the seasonal peak are right, multiplied by a stochastic cloud
   index. This is what you want for anything resembling a real site.
-- "series"     — GHI read from a CSV, for replaying measured data.
+- "series"     — GHI read from a CSV, for replaying measured data. The CSV
+  can be re-read as it changes on disk, so an external fetcher can drive the
+  sky live; when it goes stale the stochastic cloud model takes over.
 
 All three publish `IrradianceComponents` (GHI, DNI, DHI and the sun's
 position). Plane-of-array transposition is deliberately *not* done here: one
@@ -34,8 +36,15 @@ from dertwin.devices.external.solar import (
     SolarPosition,
     VALID_CLEARSKY_MODELS,
 )
+from dertwin.devices.external.series_feed import (
+    DEFAULT_STALE_AFTER_S,
+    DecayingOffset,
+    SeriesFeed,
+    SourceSwitch,
+)
 from dertwin.devices.external.timeseries import (
     INTERPOLATE_LINEAR,
+    SeriesTable,
     TimeSeries,
 )
 
@@ -48,6 +57,14 @@ MODEL_SERIES = "series"
 VALID_IRRADIANCE_MODELS = (MODEL_SINUSOIDAL, MODEL_CLEARSKY, MODEL_SERIES)
 
 SERIES_COLUMN_KT = "kt"
+DEFAULT_GHI_COLUMN = "ghi_w_m2"
+DEFAULT_DNI_COLUMN = "dni_w_m2"
+DEFAULT_DHI_COLUMN = "dhi_w_m2"
+
+# Below this much clear-sky GHI there is no meaningful clear-sky index to
+# divide out: the ratio is numerically useless and nothing downstream can
+# produce power anyway, so the handover simply has nothing to carry.
+KT_CLEAR_SKY_FLOOR_W_M2 = 1.0
 
 
 class IrradianceModelBase:
@@ -258,55 +275,244 @@ class ClearSkyIrradianceModel(IrradianceModelBase):
         return solar.daylight_hours(utc_time, self.latitude, self.longitude)
 
 
+def resolve_beam_split(
+    ghi: float,
+    position: SolarPosition,
+    utc_time: datetime,
+    dni: Optional[float] = None,
+    dhi: Optional[float] = None,
+) -> tuple:
+    """
+    Beam and diffuse for a recorded GHI.
+
+    A file that carries measured components should be believed: the Erbs
+    correlation is a good guess at the split, and a guess is all it is. So
+    whichever of DNI and DHI the file provides is used, the other is derived
+    from GHI when only one is there, and Erbs runs only when neither is.
+
+    When the file gives both, they are taken as they stand and are *not*
+    forced to close with GHI. Measured triples rarely close exactly, and
+    quietly adjusting one of three measured numbers to make the arithmetic
+    tidy would hide a data problem rather than report it.
+    """
+
+    cos_z = position.cos_zenith
+
+    if dni is not None and dhi is not None:
+        return max(0.0, dni), max(0.0, dhi)
+
+    if cos_z > 0.0:
+        if dni is not None:
+            beam = max(0.0, dni)
+            return beam, max(0.0, ghi - beam * cos_z)
+
+        if dhi is not None:
+            diffuse = max(0.0, min(dhi, ghi))
+            return max(0.0, (ghi - diffuse) / cos_z), diffuse
+
+    return solar.erbs_split(ghi, position, utc_time)
+
+
 class SeriesIrradianceModel(IrradianceModelBase):
     """
-    GHI replayed from a CSV, with real solar geometry for the DNI/DHI split.
+    GHI replayed from a CSV feed, with real solar geometry for the DNI/DHI
+    split unless the file carries the components itself.
 
-    Instants outside the series are dark, with one warning.
+    With no `fallback` this is the one-shot model it has always been, down to
+    instants outside the series being dark. A feed that can go stale is given
+    a fallback instead — a full `ClearSkyIrradianceModel` driven by the
+    stochastic cloud model — because a live feed that stops arriving must not
+    turn the site's sky off. Reusing the clear-sky model wholesale, rather
+    than reimplementing a sky here, is what keeps the fallback's irradiance
+    indistinguishable from a run that never had a series at all.
+
+    The switch is made continuous in clear-sky-index space rather than in
+    W/m², because the quantity that carries over a handover is how cloudy it
+    is, not how much irradiance a particular sun elevation happened to
+    deliver. Going into the fallback, the model's intraday perturbation is
+    seeded with the last observed index; coming back, an offset with the same
+    time constant decays onto the measurement. Either way the switch tick
+    itself moves GHI no further than the clear-sky curve moves in one tick.
     """
 
     def __init__(
         self,
         latitude: float,
         longitude: float,
-        series: TimeSeries,
+        series: Optional[TimeSeries] = None,
         altitude_m: float = 0.0,
         linke_turbidity: float = 3.0,
         timezone_name: Optional[str] = None,
+        feed: Optional[SeriesFeed] = None,
+        fallback: Optional["ClearSkyIrradianceModel"] = None,
+        handover_tau_s: float = 0.0,
+        clearsky_model: str = solar.CLEARSKY_INEICHEN,
+        dni_column: Optional[str] = None,
+        dhi_column: Optional[str] = None,
     ):
+        if feed is None:
+            if series is None:
+                raise ValueError(
+                    "SeriesIrradianceModel needs either a series or a feed"
+                )
+            feed = SeriesFeed.from_table(
+                SeriesTable(
+                    columns={DEFAULT_GHI_COLUMN: series},
+                    primary=DEFAULT_GHI_COLUMN,
+                    rows=len(series),
+                    skipped_rows=0,
+                )
+            )
+
         self.latitude = latitude
         self.longitude = longitude
+        self.feed = feed
         self.series = series
         self.altitude_m = altitude_m
         self.linke_turbidity = linke_turbidity
         self.timezone_name = timezone_name
+        self.clearsky_model = clearsky_model
+        self.fallback = fallback
+        self.dni_column = dni_column
+        self.dhi_column = dhi_column
+
+        self.switch = SourceSwitch(feed.name)
+        self.handover = DecayingOffset(handover_tau_s)
 
         self._components = IrradianceComponents.dark()
+        self._last_kt: Optional[float] = None
 
-    def advance(self, utc_time: datetime, sim_time: float, dt: float) -> None:
-        self.last_utc_time = utc_time
-        position = solar.solar_position(utc_time, self.latitude, self.longitude)
-        value = self.series.value_at(utc_time)
+    # --------------------------------------------------
 
-        if value is None or value <= 0.0 or not position.is_up:
-            self._components = IrradianceComponents.dark(position)
-            return
+    def _clear_sky(self, position: SolarPosition, utc_time: datetime) -> float:
+        if not position.is_up:
+            return 0.0
 
-        ghi = float(value)
-        dni, dhi = solar.erbs_split(ghi, position, utc_time)
+        return solar.clear_sky_ghi(
+            position,
+            utc_time,
+            model=self.clearsky_model,
+            altitude_m=self.altitude_m,
+            linke_turbidity=self.linke_turbidity,
+        )
 
-        self._components = solar.limit_beam_to_clear_sky(
+    def _build(
+        self,
+        ghi: float,
+        dni: float,
+        dhi: float,
+        position: SolarPosition,
+        utc_time: datetime,
+        clear_sky: float,
+    ) -> IrradianceComponents:
+        return solar.limit_beam_to_clear_sky(
             IrradianceComponents(
                 ghi=ghi,
                 dni=dni,
                 dhi=dhi,
                 position=position,
-                clear_sky_ghi=ghi,
-                clear_sky_index=1.0,
+                # With no fallback there is no clear-sky curve in play at all,
+                # so the recorded value is its own reference and the index is
+                # 1 — what this model has always reported.
+                clear_sky_ghi=clear_sky if self.fallback is not None else ghi,
+                clear_sky_index=(
+                    min(1.0, ghi / clear_sky)
+                    if self.fallback is not None
+                    and clear_sky > KT_CLEAR_SKY_FLOOR_W_M2
+                    else 1.0
+                ),
             ),
             utc_time,
             altitude_m=self.altitude_m,
             linke_turbidity=self.linke_turbidity,
+        )
+
+    def _sample_components(self, sample: dict) -> tuple:
+        ghi = float(sample[self.feed.primary])
+        dni = sample.get(self.dni_column) if self.dni_column else None
+        dhi = sample.get(self.dhi_column) if self.dhi_column else None
+        return ghi, dni, dhi
+
+    # --------------------------------------------------
+
+    def advance(self, utc_time: datetime, sim_time: float, dt: float) -> None:
+        self.last_utc_time = utc_time
+        self.feed.refresh(utc_time)
+
+        position = solar.solar_position(utc_time, self.latitude, self.longitude)
+        sample = self.feed.sample(utc_time)
+
+        if self.fallback is None:
+            if sample is None or not position.is_up:
+                self._components = IrradianceComponents.dark(position)
+                return
+
+            ghi, dni, dhi = self._sample_components(sample)
+
+            if ghi <= 0.0:
+                self._components = IrradianceComponents.dark(position)
+                return
+
+            dni, dhi = resolve_beam_split(ghi, position, utc_time, dni, dhi)
+            self._components = self._build(
+                ghi, dni, dhi, position, utc_time, clear_sky=ghi
+            )
+            return
+
+        clear_sky = self._clear_sky(position, utc_time)
+
+        if sample is None:
+            if self.switch.to_fallback(
+                utc_time,
+                "no data" if not self.feed.has_data else "past the last row",
+            ):
+                if self._last_kt is not None and self.handover.tau_s > 0.0:
+                    self.fallback.cloud_model.seed_from_kt(self._last_kt)
+                self.handover.clear()
+
+            self.fallback.advance(utc_time, sim_time, dt)
+            self._components = self.fallback.get_components()
+            self._last_kt = self._components.clear_sky_index
+            return
+
+        ghi, dni, dhi = self._sample_components(sample)
+        ghi = max(0.0, ghi)
+
+        measured_kt = (
+            ghi / clear_sky if clear_sky > KT_CLEAR_SKY_FLOOR_W_M2 else None
+        )
+
+        if self.switch.to_series(utc_time) and measured_kt is not None:
+            model_kt = self.fallback.get_components().clear_sky_index
+            self.handover.start(model_kt - measured_kt, utc_time)
+
+        # Kept running while the series drives, so the index it would report
+        # is a current one rather than one frozen at the last switch.
+        self.fallback.advance(utc_time, sim_time, dt)
+
+        offset = self.handover.value(utc_time)
+        scale = 1.0
+
+        if offset and measured_kt is not None and measured_kt > 0.0:
+            scale = max(0.0, measured_kt + offset) / measured_kt
+
+        if not position.is_up or ghi * scale <= 0.0:
+            self._components = IrradianceComponents.dark(position)
+            if measured_kt is not None:
+                self._last_kt = measured_kt * scale
+            return
+
+        dni, dhi = resolve_beam_split(ghi, position, utc_time, dni, dhi)
+
+        # One scale for all three keeps whatever closure the file had.
+        self._components = self._build(
+            ghi * scale, dni * scale, dhi * scale,
+            position, utc_time, clear_sky=clear_sky,
+        )
+        self._last_kt = (
+            self._components.ghi / clear_sky
+            if clear_sky > KT_CLEAR_SKY_FLOOR_W_M2
+            else self._last_kt
         )
 
     def get_components(self) -> IrradianceComponents:
@@ -335,17 +541,83 @@ def _resolve_model_name(cfg: dict) -> str:
     return MODEL_SINUSOIDAL
 
 
-def _build_series(cfg: dict, data_root: Path) -> TimeSeries:
+def _build_feed(
+    cfg: dict, data_root: Path, primary: str, extra_columns=()
+) -> SeriesFeed:
+    """
+    The feed behind `series_csv`.
+
+    `series_refresh_s` of 0 — the default — keeps the one-shot read the key
+    has always had. A positive value makes the feed live, and brings the
+    staleness fallback with it: `series_stale_after_s` then defaults to an
+    hour rather than to "never", because a live feed with no fallback is the
+    one combination that has no sensible behaviour when the fetcher stops.
+
+    Setting `series_stale_after_s` on its own is allowed and does what it
+    says: a static file, read once, that stops being authoritative a given
+    time after its last row.
+    """
+
     csv_path = Path(cfg["series_csv"])
     if not csv_path.is_absolute():
         csv_path = data_root / csv_path
 
-    return TimeSeries.from_csv(
+    refresh_s = float(cfg.get("series_refresh_s") or 0.0)
+    stale_after_s = cfg.get("series_stale_after_s")
+
+    if stale_after_s is None and refresh_s > 0.0:
+        stale_after_s = DEFAULT_STALE_AFTER_S
+
+    return SeriesFeed(
         csv_path,
-        value_column=cfg.get("series_column", "ghi_w_m2"),
+        primary=primary,
         time_column=cfg.get("series_time_column", "timestamp"),
+        extra_columns=extra_columns,
         interpolate=cfg.get("series_interpolate", INTERPOLATE_LINEAR),
+        refresh_s=refresh_s,
+        stale_after_s=None if stale_after_s is None else float(stale_after_s),
+        max_gap_s=float(cfg.get("series_max_gap_s") or 0.0),
     )
+
+
+def _handover_tau_s(cfg: dict) -> float:
+    """
+    How long a handover between the series and the model takes to complete.
+
+    Defaults to the cloud model's own intraday correlation time, so the
+    handover is not a new timescale in the simulation — it is the existing
+    perturbation decaying, at the rate it always decays. `0` turns it off and
+    makes each switch a plain jump to the new source.
+    """
+
+    explicit = cfg.get("series_handover_tau_s")
+
+    if explicit is not None:
+        return float(explicit)
+
+    return float((cfg.get("cloud") or {}).get("intraday_tau_s", 900.0))
+
+
+def _fallback_cloud_model(cfg: dict, feed: SeriesFeed) -> Optional[CloudModel]:
+    """
+    The cloud model a stale feed falls back to, or None when the feed cannot
+    go stale and so needs none.
+    """
+
+    if feed.stale_after_s is None:
+        return None
+
+    cloud_model = build_cloud_model(cfg.get("cloud"))
+
+    if isinstance(cloud_model, ClearSkyCloudModel):
+        logger.warning(
+            "%s can go stale, but clouds are switched off, so the fallback "
+            "sky will be cloudless. Leave 'cloud.enabled' alone for a "
+            "stochastic fallback.",
+            feed.name,
+        )
+
+    return cloud_model
 
 
 def build_irradiance_model(
@@ -390,18 +662,48 @@ def build_irradiance_model(
     timezone_name = cfg.get("timezone")
 
     series_csv = cfg.get("series_csv")
-    series_column = cfg.get("series_column", "ghi_w_m2")
+    series_column = cfg.get("series_column", DEFAULT_GHI_COLUMN)
+    altitude_m = cfg.get("altitude_m", 0.0)
+    linke_turbidity = cfg.get("linke_turbidity", 3.0)
+    clearsky_model = cfg.get("clearsky_model", solar.CLEARSKY_INEICHEN)
 
     # An absolute GHI series replaces the clear-sky curve entirely; a kt series
     # modulates it in place of the stochastic cloud model.
     if series_csv and series_column != SERIES_COLUMN_KT:
+        dni_column = cfg.get("series_dni_column", DEFAULT_DNI_COLUMN)
+        dhi_column = cfg.get("series_dhi_column", DEFAULT_DHI_COLUMN)
+
+        feed = _build_feed(
+            cfg, data_root, series_column, (dni_column, dhi_column)
+        )
+        cloud_model = _fallback_cloud_model(cfg, feed)
+
+        fallback = (
+            ClearSkyIrradianceModel(
+                latitude=latitude,
+                longitude=longitude,
+                altitude_m=altitude_m,
+                clearsky_model=clearsky_model,
+                linke_turbidity=linke_turbidity,
+                cloud_model=cloud_model,
+                timezone_name=timezone_name,
+            )
+            if cloud_model is not None
+            else None
+        )
+
         return SeriesIrradianceModel(
             latitude=latitude,
             longitude=longitude,
-            series=_build_series(cfg, data_root),
-            altitude_m=cfg.get("altitude_m", 0.0),
-            linke_turbidity=cfg.get("linke_turbidity", 3.0),
+            feed=feed,
+            altitude_m=altitude_m,
+            linke_turbidity=linke_turbidity,
             timezone_name=timezone_name,
+            fallback=fallback,
+            handover_tau_s=_handover_tau_s(cfg) if fallback else 0.0,
+            clearsky_model=clearsky_model,
+            dni_column=dni_column,
+            dhi_column=dhi_column,
         )
 
     if model == MODEL_SERIES and not series_csv:
@@ -410,9 +712,14 @@ def build_irradiance_model(
     if series_csv:
         from dertwin.devices.external.clouds import SeriesCloudModel
 
+        feed = _build_feed(cfg, data_root, SERIES_COLUMN_KT)
+        fallback = _fallback_cloud_model(cfg, feed)
+
         cloud_model = SeriesCloudModel(
-            _build_series(cfg, data_root),
+            feed=feed,
             kt_min=(cfg.get("cloud") or {}).get("kt_min", 0.0),
+            fallback=fallback,
+            handover_tau_s=_handover_tau_s(cfg) if fallback else 0.0,
         )
     else:
         cloud_model = build_cloud_model(cfg.get("cloud"))
@@ -420,9 +727,9 @@ def build_irradiance_model(
     return ClearSkyIrradianceModel(
         latitude=latitude,
         longitude=longitude,
-        altitude_m=cfg.get("altitude_m", 0.0),
-        clearsky_model=cfg.get("clearsky_model", solar.CLEARSKY_INEICHEN),
-        linke_turbidity=cfg.get("linke_turbidity", 3.0),
+        altitude_m=altitude_m,
+        clearsky_model=clearsky_model,
+        linke_turbidity=linke_turbidity,
         cloud_model=cloud_model,
         timezone_name=timezone_name,
     )

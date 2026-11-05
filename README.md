@@ -492,7 +492,9 @@ still holds, so the same day always reports the same regime.
 series is already a function of the date.
 **`series_csv`** — replay recorded data. With `series_column: "kt"` it drives
 the cloud index and keeps the clear-sky curve; otherwise it is absolute GHI in
-W/m².
+W/m². Read once by default; `series_refresh_s` makes it a live input that is
+re-read as it changes, with the stochastic cloud model taking over when it goes
+stale. See [A live irradiance series](#a-live-irradiance-series).
 
 What this buys, at Stockholm (59.33 N):
 
@@ -503,6 +505,156 @@ What this buys, at Stockholm (59.33 N):
 | 21 Dec | 5.7 h | ~93 W/m² |
 
 The `sinusoidal` model gives all three 12.0 h and 1000 W/m².
+
+### A live irradiance series
+
+`series_csv` is read once at build time by default, which is all a replay of
+recorded data needs. Set `series_refresh_s` and the same file becomes a live
+input: dertwin re-reads it as it changes, so a separate fetcher — an
+Open-Meteo sidecar, a plant's own historian, anything that can write a CSV —
+can drive the simulated sky from real weather without dertwin knowing
+anything about where the data came from.
+
+```json
+"irradiance": {
+  "latitude": 50.0,
+  "longitude": 10.0,
+  "series_csv": "weather/ghi.csv",
+  "series_refresh_s": 300.0,
+  "series_stale_after_s": 1800.0,
+  "cloud": { "mean_kt": 0.55, "seed": 42 }
+}
+```
+
+The keys, all optional:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `series_csv` | — | the file to read |
+| `series_column` | `ghi_w_m2` | the driving column. `kt` selects the sky-index form |
+| `series_time_column` | `timestamp` | the timestamp column |
+| `series_interpolate` | `linear` | `linear` between rows, or `step` to hold each row |
+| `series_dni_column` | `dni_w_m2` | optional measured beam, used when the header has it |
+| `series_dhi_column` | `dhi_w_m2` | optional measured diffuse, likewise |
+| `series_refresh_s` | `0` | re-read interval. `0` is one-shot — read once, never again |
+| `series_stale_after_s` | `3600` live, never one-shot | how long the last row is held before the series counts as stale |
+| `series_max_gap_s` | `0` | a gap wider than this is missing data rather than something to interpolate across. `0` bridges any gap |
+| `series_handover_tau_s` | `cloud.intraday_tau_s` | how long a switch between the series and the model takes to complete. `0` makes each switch a plain jump |
+
+#### The file contract
+
+So an external fetcher knows exactly what to write:
+
+- **A header row is required.** Column order does not matter and extra columns
+  are ignored, so a file carrying temperature, wind and pressure alongside
+  irradiance is fine — dertwin reads the columns it was told about.
+- **Timestamps are UTC.** ISO 8601, with a trailing `Z`, an explicit offset, or
+  no zone at all, in which case UTC is assumed. Rows may be in any order; they
+  are sorted on read.
+- **Units.** `ghi_w_m2`, `dni_w_m2` and `dhi_w_m2` are W/m². `kt` is the
+  dimensionless clear-sky index in [0, 1] — the fraction of clear-sky
+  irradiance reaching the ground.
+- **GHI or kt, not both.** With `series_column: "kt"` the series replaces the
+  stochastic cloud model and the clear-sky curve stays; otherwise the column
+  is absolute GHI and replaces the curve entirely.
+- **DNI and DHI are optional and are believed when present.** Give both and
+  they are used as they stand, and are *not* adjusted to close with GHI —
+  measured triples rarely close, and silently fixing one of three measured
+  numbers would hide a data problem. Give one and the other is derived from
+  GHI. Give neither and the Erbs correlation splits GHI, as it always has.
+- **Duplicate timestamps: the last row in the file wins.** A correction
+  appended later therefore overrides the row it corrects.
+- **A blank cell is a row that column does not have.** Each column is built
+  from the rows where its own cell held a number, so a half-filled DNI column
+  still leaves a complete GHI series.
+- **Write the file atomically.** Write a temporary file in the same directory
+  and `rename` it over the target. That is the one pattern under which a
+  reader can never see a half-written file:
+
+  ```python
+  tmp = path.with_suffix(".csv.tmp")
+  tmp.write_text(body)
+  os.replace(tmp, path)          # atomic within a filesystem
+  ```
+
+  dertwin stats the file before and after each read and throws away a snapshot
+  that moved underneath it, so an in-place append is survivable — but it costs
+  a refresh interval each time it is caught, and the rename costs nothing.
+- **Growing the file is the normal case.** Rewrite it whole with the new rows
+  appended, or keep a rolling window; either works, and only the rows covering
+  the simulated instant matter.
+- **A malformed row is skipped, not fatal.** In live mode an unparseable
+  timestamp or value is counted, logged and dropped, so one torn line cannot
+  take the simulation with it. A file missing its header or its driving column
+  is a different matter: it is unusable, and the previous snapshot is kept.
+
+Only the file is re-read. Nothing else in the config is, so a fetcher cannot
+change the site's latitude, its panels or its battery.
+
+#### When the series goes stale
+
+A live feed will eventually be late — the fetcher dies, the network goes, the
+container is rescheduled. `series_stale_after_s` is how long the last row
+keeps being served once simulated time has passed it; a fetcher writing hourly
+rows is always a little behind, and without the hold every instant between
+updates would have no data at all.
+
+Past that, the series is stale and **the stochastic cloud model takes over**.
+Not a dark sky and not a cloudless one: both are wrong, and both are wrong in
+a way that quietly corrupts whatever is reading the twin. A dark sky tells an
+EMS the plant has failed; a cloudless one tells it the plant is at nameplate.
+The stochastic model tells it the weather is ordinary, which is the only
+honest answer when the measurement is gone. The same applies to a file that
+is missing or unreadable at startup: the run begins on the stochastic model
+and picks the feed up when it appears, rather than refusing to start.
+
+Each transition is one log line, in both directions:
+
+```
+WARNING  weather/ghi.csv: series is stale at 2025-06-22T06:00:00+00:00
+         (past the last row); falling back to the stochastic cloud model
+INFO     weather/ghi.csv: fresh series data at 2025-06-22T09:12:00+00:00;
+         leaving the stochastic cloud model
+```
+
+A run that never loses its feed says nothing at all, and one that flaps says
+exactly when and how often.
+
+**The switch carries no step of its own.** What crosses a handover is how
+cloudy it is — the clear-sky index — not the W/m² a particular sun elevation
+happened to deliver, and it is carried by the same rule in both directions:
+the last index reported is held and relaxed away at the cloud model's own
+intraday correlation time.
+
+Going into the fallback, that needs no new machinery. The AR(1) model's index
+is `kt_day + x`, a daily regime plus a mean-reverting perturbation, and the
+perturbation already decays at `intraday_tau_s`. Seeding `x` with the
+difference between the last measurement and today's regime makes the first
+index the model reports *exactly* the last one measured, after which it
+relaxes back to the regime at the rate it always does. The day's regime is
+left alone deliberately: a measurement that ends on a bright minute must not
+turn the whole day clear.
+
+Coming back, the series is data and cannot be seeded, so an explicit offset
+with the same time constant decays onto it instead. The alternative — jumping
+straight to fresh data — is available as `series_handover_tau_s: 0`, and is
+the right choice if you would rather the twin always report the measurement
+than always move smoothly.
+
+Either way the switch tick itself is a step of zero, and every step after it
+is one the stochastic model could have produced on its own. A short blend over
+an arbitrary window would have done the same job for the eye, but it would
+have reported a sky neither source produced and added a timescale the
+simulation does not otherwise have.
+
+Everything here — the refresh interval, the grace period, the handover — is
+measured in **simulated** time, for the same reason the cloud regime is: a run
+that is not in real time, or one replayed from the same config, has to behave
+the same way twice. In a real-time deployment, which is what a live feed is
+for, the two coincide.
+
+**Ambient temperature is not part of this.** The series drives irradiance
+only; `ambient_temperature` stays on its own model.
 
 ### PV array orientation
 
