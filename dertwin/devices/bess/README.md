@@ -13,8 +13,9 @@ Responsible for deterministic energy behavior:
 - State of Charge (SOC)
 - Charge / discharge efficiency
 - SOC-based power limits (hard stop, or legacy linear derating)
+- Temperature-based power limits, with a configurable derate curve
 - Optional self-discharge
-- Thermal model
+- Thermal model, optionally with a managed container (HVAC setpoint band)
 - Cycle counting
 - State of health tracking
 - Persistable state snapshot
@@ -70,6 +71,46 @@ cycle counter and SOH are defined against.
 `self_discharge_percent_per_day` is a passive loss applied every step, floored
 at the hard discharge limit: a BMS defends its reserve rather than letting idle
 losses walk through it. Off by default.
+
+#### Thermal model and capability
+
+The cell is one lumped node. Every step adds Joule heat `I²R·dt` and exchanges
+with ambient across `thermal_conductance_w_per_k`, over
+`thermal_capacity_j_per_k`, giving a time constant `tau = C_th / G` — 2500 s
+with the auto-scaled defaults, for any pack size. Ambient comes from the
+external `AmbientTemperatureModel` when the site has one, and is refreshed
+every tick.
+
+`thermal.derate` is the capability curve: a ladder of `(upper bound °C,
+factor)` bands plus an `above_factor`, defaulting to the curve this model has
+always had (`≤ 0 → 0.5`, `≤ 10 → 0.8`, `≤ 40 → 1.0`, `≤ 50 → 0.8`,
+`≤ 60 → 0.5`, above → `0.0`). The factor scales charge and discharge alike and
+reaches the `available_*_power` registers through `get_power_limits()`.
+
+**Unmanaged** (`thermal.managed = false`, the default): the exchange term only
+cools (`max(0, T − T_amb)`) and the result is floored at ambient, so an idle
+pack sits exactly at ambient — and a pack on a 4 °C site sits in the `0.8×`
+cold derate.
+
+**Managed** (`thermal.managed = true`): two changes, both deliberate.
+
+1. The exchange is **signed**, so the cell relaxes toward ambient in both
+   directions. A heated cell is above ambient and has to be allowed to fall
+   back when ambient rises; the floor at ambient would have pinned it.
+2. The result cannot leave `[heat_setpoint_c, cool_setpoint_c]`. The HVAC is
+   ideal inside the band: it supplies or removes exactly the heat needed to
+   hold the nearest edge. A pack that starts outside the band is therefore
+   brought to that edge in one step rather than over a ramp.
+
+The relaxation uses `thermal.time_constant_s` when set, otherwise `C_th / G`;
+the conductance is backed out of it as `G = C_th / tau`, so configuring the
+time constant configures the dynamics directly.
+
+`thermal.aux_power_kw` is the container's draw for as long as the band is what
+stopped the cell from going where its own dynamics were taking it. It is
+published as `hvac_power_kw` and summed into `SitePowerModel` through its
+`aux_load_supplier`, on the load side — it is site load, not inverter power, so
+it is never netted off `active_power`.
 
 ### inverter.py
 **AC-side power control model**

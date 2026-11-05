@@ -40,6 +40,12 @@ class BESSTelemetry(TelemetryBase):
     grid_voltage_bc: float
     grid_voltage_ca: float
 
+    # Container HVAC draw while heating or cooling is active, in kW. Always
+    # zero on an unmanaged pack. It is site load, not inverter power, so it is
+    # reported here and summed into the site balance rather than netted off
+    # active_power.
+    hvac_power_kw: float = 0.0
+
     # Controller
     working_status: int = 0
     fault_code: int = 0
@@ -81,6 +87,9 @@ class BESSTelemetry(TelemetryBase):
             grid_voltage_ab=0.0,
             grid_voltage_bc=0.0,
             grid_voltage_ca=0.0,
+
+            # Container HVAC
+            hvac_power_kw=0.0,
 
             # Controller
             working_status=0,

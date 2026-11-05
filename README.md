@@ -140,6 +140,7 @@ Key properties:
 - Runtime asset management — `add_asset` / `remove_asset` for live scenario scripting and EMS-driven rosters
 - Hard SOC limits on BESS assets — SOC lands exactly on the limit, then power reads zero while the setpoint stays as written
 - Optional SOC persistence across restarts
+- Battery thermal management — a managed container holds the cells inside a setpoint band, so a cold site keeps full capability; configurable temperature derate curve and optional HVAC auxiliary draw on the meter
 - Location- and date-aware clear-sky irradiance — correct sunrise, sunset and seasonal peak for any latitude and day of the year
 - Stochastic cloud cover with persistent day-to-day weather regimes — seeded, a date's weather is reproducible *per date*, so restarts do not replay the same sky
 - Plane-of-array irradiance for tilted, oriented PV arrays, with DC/AC ratio and inverter clipping
@@ -326,6 +327,71 @@ start at `initial_soc`. When set, SOC and the lifetime counters are written
 atomically on an interval and on shutdown, and restored on the next start; the
 first boot, a missing file or an unusable one falls back to `initial_soc` and
 logs why.
+
+### BESS thermal management
+
+Cell temperature derates capability. The curve is a ladder of bands, and the
+defaults are the ones the model has always had — `≤ 0 °C → 0.5×`,
+`≤ 10 → 0.8×`, `≤ 40 → 1.0×`, `≤ 50 → 0.8×`, `≤ 60 → 0.5×`, above → `0.0×`.
+It scales both charge and discharge, and lands in `available_charging_power` /
+`available_discharging_power`.
+
+An **unmanaged** pack sits at ambient whenever it is idle, so a site that spends
+the winter between 4 °C and 14 °C spends it at `0.8×` nameplate. A **managed**
+pack sits in a container whose HVAC holds it inside a setpoint band:
+
+```json
+{
+  "type": "bess",
+  "capacity_kwh": 100.0,
+  "thermal": {
+    "managed": true,
+    "heat_setpoint_c": 15.0,
+    "cool_setpoint_c": 30.0,
+    "aux_power_kw": 1.5,
+    "time_constant_s": 2500.0,
+    "derate": {
+      "bands": [[0.0, 0.5], [10.0, 0.8], [40.0, 1.0], [50.0, 0.8], [60.0, 0.5]],
+      "above_factor": 0.0
+    }
+  }
+}
+```
+
+**`managed`** — `false` by default, and with the whole `thermal` block absent
+the battery behaves exactly as it did in 0.2.1.
+
+**`heat_setpoint_c` / `cool_setpoint_c`** — the band, 15 °C and 30 °C by
+default. Inside it nothing is held: the cell relaxes toward ambient, in either
+direction, with time constant `time_constant_s`. It is never allowed to leave
+the band, so with the default band inside the full-capability zone a managed
+pack never derates on temperature. The HVAC is ideal within the band — it
+supplies or removes exactly the heat needed to hold the nearest edge — so a
+pack that *starts* outside the band (a restored state file, an `ambient_temp_c`
+below the heat setpoint) is brought to that edge immediately rather than over a
+ramp. `heat_setpoint_c` above `cool_setpoint_c` is a config error.
+
+**`time_constant_s`** — the relaxation time constant, in seconds. Omit it and
+it is the pack's own `C_th / G`, which is **2500 s (≈42 min)** with the
+auto-scaled thermal defaults, whatever the pack size.
+
+**`aux_power_kw`** — the container's own draw while heating or cooling is
+actually active, `0` by default. It is reported as `hvac_power_kw` on the BESS
+and enters the site power balance **on the load side**, exactly as the site
+load does, so it shows in grid power, the import counter and the meter. It is
+*not* netted off the BESS active power: a discharging managed pack still
+reports what its inverter delivered, and the container's draw is accounted
+separately. With `base_load` 7 kW, a 1.5 kW container and an idle pack the
+meter reads 8.5 kW.
+
+**`derate.bands`** — the capability ladder as `[upper bound °C, factor]` pairs,
+in increasing order of temperature; the factor of the first band whose bound
+the cell temperature does not exceed wins. **`derate.above_factor`** applies
+above the last bound. Omit `derate` and the curve is unchanged, so no existing
+config shifts.
+
+Cell temperature is always reported in `battery_temperature`, managed or not,
+and is still capped at 80 °C.
 
 ### Solar irradiance
 
@@ -717,7 +783,7 @@ docker run \
 pytest
 ```
 
-The test suite covers device physics (BESS, PV, CHP, energy meter), solar geometry and clear-sky irradiance against published reference values, cloud-model statistics, per-date determinism of the cloud regime and the load drift across restarts, the statistics of the stochastic site load, register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
+The test suite covers device physics (BESS, PV, CHP, energy meter), battery thermal management (including a golden day-long comparison that an unmanaged pack still reproduces the 0.2.1 model exactly), solar geometry and clear-sky irradiance against published reference values, cloud-model statistics, per-date determinism of the cloud regime and the load drift across restarts, the statistics of the stochastic site load, register encoding with per-register endianness, FC02 discrete input routing, external models, protocol parity (TCP and RTU), mixed-protocol engine integration, runtime asset add/remove, and full end-to-end site integration via Modbus. See `tests/` for structure.
 
 The built-in solar model is also cross-checked against `pvlib`, which is
 optional, so that suite skips unless you install it:
@@ -736,6 +802,7 @@ pip install "dertwin[pvlib]"
 - [x] Plane-of-array irradiance, DC/AC ratio and inverter clipping
 - [x] Stochastic site load with daily profile and drift
 - [x] Hard BESS SOC limits with optional persistence
+- [x] BESS thermal management with a configurable temperature derate curve
 - [x] Dynamic asset add/remove at runtime
 - [x] CHP support with realistic state machine
 - [x] Modbus FC02 discrete input support

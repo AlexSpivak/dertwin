@@ -10,7 +10,11 @@ from dertwin.core.clock import SimulationClock
 from dertwin.core.engine import SimulationEngine
 from dertwin.controllers.device_controller import DeviceController
 from dertwin.core.registers import RegisterMap
-from dertwin.devices.bess.battery import LIMIT_MODE_HARD, BatteryLimits
+from dertwin.devices.bess.battery import (
+    LIMIT_MODE_HARD,
+    BatteryLimits,
+    BatteryThermalConfig,
+)
 from dertwin.devices.bess.simulator import BESSSimulator
 from dertwin.devices.chp.simulator import CHPSimulator
 from dertwin.devices.pv.simulator import PVSimulator
@@ -534,6 +538,7 @@ class SiteController:
                 self_discharge_percent_per_day=spec.get(
                     "self_discharge_percent_per_day", 0.0
                 ),
+                thermal=BatteryThermalConfig.from_config(spec.get("thermal")),
                 state_file=self._resolve_state_file(spec),
                 state_save_interval_s=spec.get("state_save_interval_s", 60.0),
                 asset_id=spec.get("asset_id") or spec.get("name") or dtype,

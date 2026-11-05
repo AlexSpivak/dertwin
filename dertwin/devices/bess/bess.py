@@ -37,6 +37,7 @@ class BESSModel:
             service_current=self.service_current(actual_power),
             system_soc=self.battery.soc,
             battery_temperature=self.battery.temperature_c,
+            hvac_power_kw=self.battery.hvac_power_kw,
             active_power=actual_power,
             reactive_power=self.inverter.reactive_power(),
             apparent_power=self.inverter.apparent_power(),
